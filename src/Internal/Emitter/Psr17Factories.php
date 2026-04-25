@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Emitter;
@@ -31,7 +32,7 @@ final readonly class Psr17Factories
         ) {
             throw new \InvalidArgumentException(
                 'Factory object must implement all four PSR-17 factory interfaces; got '
-                .\get_debug_type($all)
+                . \get_debug_type($all)
             );
         }
         return new self($all, $all, $all, $all);

@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Runner;
@@ -34,25 +35,25 @@ final class HttpFoundationRequestBuilder
     private function buildServer(OxRequest $ox): array
     {
         $qs = $ox->queryString();
-        $uri = $ox->path().($qs !== null ? '?'.$qs : '');
+        $uri = $ox->path() . ($qs !== null ? '?' . $qs : '');
 
         $server = [
-            'REQUEST_METHOD'     => $ox->method(),
-            'REQUEST_URI'        => $uri,
-            'QUERY_STRING'       => $qs ?? '',
-            'SERVER_PROTOCOL'    => $ox->httpProtocol(),
-            'HTTP_HOST'          => $this->host($ox),
-            'SERVER_NAME'        => $ox->host(),
-            'SERVER_PORT'        => (string) $ox->port(),
-            'REMOTE_ADDR'        => $ox->ip(),
-            'HTTPS'              => $ox->isSecure() ? 'on' : 'off',
-            'REQUEST_TIME'       => (int) $ox->startTime(),
+            'REQUEST_METHOD' => $ox->method(),
+            'REQUEST_URI' => $uri,
+            'QUERY_STRING' => $qs ?? '',
+            'SERVER_PROTOCOL' => $ox->httpProtocol(),
+            'HTTP_HOST' => $this->host($ox),
+            'SERVER_NAME' => $ox->host(),
+            'SERVER_PORT' => (string) $ox->port(),
+            'REMOTE_ADDR' => $ox->ip(),
+            'HTTPS' => $ox->isSecure() ? 'on' : 'off',
+            'REQUEST_TIME' => (int) $ox->startTime(),
             'REQUEST_TIME_FLOAT' => $ox->startTime(true),
-            'REQUEST_SCHEME'     => $ox->scheme(),
+            'REQUEST_SCHEME' => $ox->scheme(),
         ];
 
         foreach ($ox->headers() as $name => $value) {
-            $server['HTTP_'.\strtoupper(\str_replace('-', '_', $name))] = $value;
+            $server['HTTP_' . \strtoupper(\str_replace('-', '_', $name))] = $value;
         }
 
         return $server;
@@ -63,7 +64,7 @@ final class HttpFoundationRequestBuilder
         $port = $ox->port();
         $isDefault = ($ox->scheme() === 'http' && $port === 80)
                   || ($ox->scheme() === 'https' && $port === 443);
-        return $ox->host().($isDefault ? '' : ':'.$port);
+        return $ox->host() . ($isDefault ? '' : ':' . $port);
     }
 
     /**

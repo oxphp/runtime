@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Stub\Apps;
@@ -20,7 +21,7 @@ final class FakeSymfonyKernel implements HttpKernelInterface, TerminableInterfac
     public static function echoingPath(): self
     {
         return new self(static function (Request $r): Response {
-            return new Response('sym:'.$r->getPathInfo(), 200, ['X-Kernel' => 'fake']);
+            return new Response('sym:' . $r->getPathInfo(), 200, ['X-Kernel' => 'fake']);
         });
     }
 

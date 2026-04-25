@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Stub;
@@ -32,10 +33,26 @@ final class OxPHPHarness
         self::$instance = new self();
     }
 
-    public function setWorker(bool $on): self { $this->worker = $on; return $this; }
-    public function setStreaming(bool $on): self { $this->streaming = $on; return $this; }
-    public function setRequestId(string $id): self { $this->requestId = $id; return $this; }
-    public function setWorkerId(int $id): self { $this->workerId = $id; return $this; }
+    public function setWorker(bool $on): self
+    {
+        $this->worker = $on;
+        return $this;
+    }
+    public function setStreaming(bool $on): self
+    {
+        $this->streaming = $on;
+        return $this;
+    }
+    public function setRequestId(string $id): self
+    {
+        $this->requestId = $id;
+        return $this;
+    }
+    public function setWorkerId(int $id): self
+    {
+        $this->workerId = $id;
+        return $this;
+    }
 
     public function pushRequest(RequestInterface $req): self
     {
@@ -49,8 +66,14 @@ final class OxPHPHarness
         return $this;
     }
 
-    public function isWorker(): bool { return $this->worker; }
-    public function isStreaming(): bool { return $this->streaming; }
+    public function isWorker(): bool
+    {
+        return $this->worker;
+    }
+    public function isStreaming(): bool
+    {
+        return $this->streaming;
+    }
     public function request(): RequestInterface
     {
         if ($this->current === null) {
@@ -58,8 +81,14 @@ final class OxPHPHarness
         }
         return $this->current;
     }
-    public function requestId(): string { return $this->requestId; }
-    public function workerId(): int { return $this->workerId; }
+    public function requestId(): string
+    {
+        return $this->requestId;
+    }
+    public function workerId(): int
+    {
+        return $this->workerId;
+    }
     public function serverInfo(): array
     {
         return [
@@ -70,16 +99,39 @@ final class OxPHPHarness
         ];
     }
 
-    public function recordFlush(): bool { $this->flushCount++; return true; }
-    public function recordFinish(): bool { $this->finishCount++; return true; }
-    public function recordReset(): void { $this->resetCount++; }
+    public function recordFlush(): bool
+    {
+        $this->flushCount++;
+        return true;
+    }
+    public function recordFinish(): bool
+    {
+        $this->finishCount++;
+        return true;
+    }
+    public function recordReset(): void
+    {
+        $this->resetCount++;
+    }
 
-    public function flushCount(): int { return $this->flushCount; }
-    public function finishCount(): int { return $this->finishCount; }
-    public function resetCount(): int { return $this->resetCount; }
+    public function flushCount(): int
+    {
+        return $this->flushCount;
+    }
+    public function finishCount(): int
+    {
+        return $this->finishCount;
+    }
+    public function resetCount(): int
+    {
+        return $this->resetCount;
+    }
 
     /** @return list<string> per-request captured stdout */
-    public function capturedOutputs(): array { return $this->outputs; }
+    public function capturedOutputs(): array
+    {
+        return $this->outputs;
+    }
 
     public function driveWorker(callable $handler): bool
     {

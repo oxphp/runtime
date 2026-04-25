@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Runner;
@@ -37,8 +38,8 @@ final class LaravelRunner extends AbstractHttpRunner
 
     protected function handleRequest(OxRequest $ox): void
     {
-        $base     = $this->builder->build($ox);
-        $request  = IlluminateRequest::createFromBase($base);
+        $base = $this->builder->build($ox);
+        $request = IlluminateRequest::createFromBase($base);
         $response = $this->kernel->handle($request);
 
         $this->emit($response);
@@ -71,18 +72,29 @@ final class LaravelRunner extends AbstractHttpRunner
     /** @return \Generator<string> */
     private function driveStreamedCallback(StreamedResponse $response): \Generator
     {
-        $callback = (function (): ?\Closure { return $this->callback; })->call($response);
-        if ($callback === null) { return; }
+        $callback = (function (): ?\Closure {
+            return $this->callback;
+        })->call($response);
+        if ($callback === null) {
+            return;
+        }
 
         $chunks = [];
         \ob_start(static function (string $buffer) use (&$chunks): string {
-            if ($buffer !== '') { $chunks[] = $buffer; }
+            if ($buffer !== '') {
+                $chunks[] = $buffer;
+            }
             return '';
         }, 1);
 
-        try { $callback(); }
-        finally { \ob_end_flush(); }
+        try {
+            $callback();
+        } finally {
+            \ob_end_flush();
+        }
 
-        foreach ($chunks as $chunk) { yield $chunk; }
+        foreach ($chunks as $chunk) {
+            yield $chunk;
+        }
     }
 }

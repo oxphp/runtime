@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Stub;
@@ -33,10 +34,10 @@ final class OxPHPHarnessTest extends TestCase
         $harness->pushRequest(FakeOxRequest::get('/b'));
 
         $seen = [];
-        \oxphp_worker(function () use (&$seen): void {
-            $req  = \oxphp_http_request();
+        \oxphp_worker(static function () use (&$seen): void {
+            $req = \oxphp_http_request();
             $seen[] = $req->path();
-            echo 'out:'.$req->path();
+            echo 'out:' . $req->path();
         });
 
         self::assertSame(['/a', '/b'], $seen);

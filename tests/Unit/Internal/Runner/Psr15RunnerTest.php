@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
@@ -24,7 +25,7 @@ final class Psr15RunnerTest extends TestCase
         $harness->setCurrentRequest(FakeOxRequest::get('/hello', ['q' => 'v']));
 
         $handler = FakePsr15Handler::echoingPath();
-        $runner  = new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: []);
+        $runner = new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: []);
 
         \ob_start();
         $code = $runner->run();
@@ -33,8 +34,8 @@ final class Psr15RunnerTest extends TestCase
         self::assertSame(0, $code);
         self::assertSame('psr15:/hello', $out);
         self::assertCount(1, $handler->received);
-        self::assertSame('GET',    $handler->received[0]->getMethod());
-        self::assertSame(['v'],    $handler->received[0]->getQueryParams()['q'] ? ['v'] : ['']);
+        self::assertSame('GET', $handler->received[0]->getMethod());
+        self::assertSame(['v'], $handler->received[0]->getQueryParams()['q'] ? ['v'] : ['']);
     }
 
     public function test_worker_loop_handles_multiple_requests_and_resets_between(): void
@@ -47,8 +48,12 @@ final class Psr15RunnerTest extends TestCase
         $resets = 0;
         $handler = FakePsr15Handler::echoingPath();
         $runner = new Psr15Runner(
-            $handler, new OxPHP(), new Psr17FactoryLocator(),
-            userResetters: [static function () use (&$resets): void { $resets++; }],
+            $handler,
+            new OxPHP(),
+            new Psr17FactoryLocator(),
+            userResetters: [static function () use (&$resets): void {
+                $resets++;
+            }],
         );
 
         $runner->run();
@@ -71,7 +76,7 @@ final class Psr15RunnerTest extends TestCase
         });
 
         \ob_start();
-        (new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: []))->run();
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
         \ob_end_clean();
 
         self::assertSame(['a' => '1', 'b' => '2'], $captured);

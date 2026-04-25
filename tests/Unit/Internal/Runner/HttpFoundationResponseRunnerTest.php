@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
@@ -24,7 +25,7 @@ final class HttpFoundationResponseRunnerTest extends TestCase
         $resp = new Response('plain body', 202, ['X-K' => 'v']);
 
         \ob_start();
-        (new HttpFoundationResponseRunner($resp, new OxPHP()))->run();
+        new HttpFoundationResponseRunner($resp, new OxPHP())->run();
         $out = (string) \ob_get_clean();
 
         self::assertSame('plain body', $out);
@@ -38,7 +39,7 @@ final class HttpFoundationResponseRunnerTest extends TestCase
         });
 
         \ob_start();
-        (new HttpFoundationResponseRunner($resp, new OxPHP()))->run();
+        new HttpFoundationResponseRunner($resp, new OxPHP())->run();
         $out = (string) \ob_get_clean();
 
         self::assertSame('ab', $out);

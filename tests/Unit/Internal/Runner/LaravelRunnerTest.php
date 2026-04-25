@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
@@ -43,8 +44,11 @@ final class LaravelRunnerTest extends TestCase
         $resets = 0;
         $kernel = FakeLaravelKernel::echoingPath();
         $runner = new LaravelRunner(
-            $kernel, new OxPHP(),
-            userResetters: [static function () use (&$resets): void { $resets++; }],
+            $kernel,
+            new OxPHP(),
+            userResetters: [static function () use (&$resets): void {
+                $resets++;
+            }],
         );
 
         $runner->run();

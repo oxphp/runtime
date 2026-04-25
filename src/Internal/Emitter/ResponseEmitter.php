@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Emitter;
@@ -25,7 +26,7 @@ final class ResponseEmitter
             \http_response_code($status);
             foreach ($headers as $name => $values) {
                 foreach ((array) $values as $v) {
-                    \header($name.': '.$v, false);
+                    \header($name . ': ' . $v, false);
                 }
             }
         }
@@ -36,7 +37,9 @@ final class ResponseEmitter
         }
 
         foreach ($body as $chunk) {
-            if ($chunk === '') { continue; }
+            if ($chunk === '') {
+                continue;
+            }
             echo $chunk;
             $this->bridge->streamFlush();
         }

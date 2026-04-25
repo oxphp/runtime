@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Internal\Bridge;
@@ -28,19 +29,19 @@ final class OxPHPTest extends TestCase
         $req = FakeOxRequest::get('/hello');
         OxPHPHarness::instance()->setCurrentRequest($req);
 
-        self::assertSame($req, (new OxPHP())->currentRequest());
+        self::assertSame($req, new OxPHP()->currentRequest());
     }
 
     public function test_stream_flush_increments_harness_counter(): void
     {
-        (new OxPHP())->streamFlush();
-        (new OxPHP())->streamFlush();
+        new OxPHP()->streamFlush();
+        new OxPHP()->streamFlush();
         self::assertSame(2, OxPHPHarness::instance()->flushCount());
     }
 
     public function test_finish_request_increments_harness_counter(): void
     {
-        self::assertTrue((new OxPHP())->finishRequest());
+        self::assertTrue(new OxPHP()->finishRequest());
         self::assertSame(1, OxPHPHarness::instance()->finishCount());
     }
 }

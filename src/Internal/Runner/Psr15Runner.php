@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Runner;
@@ -96,7 +97,9 @@ final class Psr15Runner extends AbstractHttpRunner
     /** @return \Generator<string> */
     private function streamBody(\Psr\Http\Message\StreamInterface $body): \Generator
     {
-        if ($body->isSeekable()) { $body->rewind(); }
+        if ($body->isSeekable()) {
+            $body->rewind();
+        }
         while (!$body->eof()) {
             yield $body->read(8192);
         }

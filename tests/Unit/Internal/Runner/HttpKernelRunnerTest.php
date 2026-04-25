@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
@@ -40,7 +41,7 @@ final class HttpKernelRunnerTest extends TestCase
         $kernel = FakeSymfonyKernel::echoingPath();
 
         \ob_start();
-        (new HttpKernelRunner($kernel, new OxPHP(), userResetters: []))->run();
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [])->run();
         \ob_end_clean();
 
         self::assertCount(1, $kernel->terminated);
@@ -57,7 +58,9 @@ final class HttpKernelRunnerTest extends TestCase
         $runner = new HttpKernelRunner(
             FakeSymfonyKernel::echoingPath(),
             new OxPHP(),
-            userResetters: [static function () use (&$resets): void { $resets++; }],
+            userResetters: [static function () use (&$resets): void {
+                $resets++;
+            }],
         );
 
         $runner->run();

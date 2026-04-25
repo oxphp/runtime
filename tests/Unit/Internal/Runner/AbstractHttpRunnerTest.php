@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
@@ -23,7 +24,7 @@ final class AbstractHttpRunnerTest extends TestCase
         OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/x'));
 
         $runner = $this->newRunner(static function (OxRequest $req, array &$state): void {
-            $state[] = 'handle:'.$req->path();
+            $state[] = 'handle:' . $req->path();
             echo 'body';
         }, $state);
 
@@ -46,11 +47,13 @@ final class AbstractHttpRunnerTest extends TestCase
         $resetCalls = 0;
         $runner = $this->newRunner(
             handler: static function (OxRequest $req, array &$state): void {
-                $state[] = 'h:'.$req->path();
+                $state[] = 'h:' . $req->path();
                 echo $req->path();
             },
             state: $state,
-            resetters: [static function () use (&$resetCalls): void { $resetCalls++; }],
+            resetters: [static function () use (&$resetCalls): void {
+                $resetCalls++;
+            }],
         );
 
         $code = $runner->run();
@@ -69,9 +72,13 @@ final class AbstractHttpRunnerTest extends TestCase
 
         $resets = 0;
         $runner = $this->newRunner(
-            handler: static function (): void { throw new \RuntimeException('kaboom'); },
+            handler: static function (): void {
+                throw new \RuntimeException('kaboom');
+            },
             state: $state,
-            resetters: [static function () use (&$resets): void { $resets++; }],
+            resetters: [static function () use (&$resets): void {
+                $resets++;
+            }],
         );
 
         $runner->run();
@@ -91,7 +98,7 @@ final class AbstractHttpRunnerTest extends TestCase
         $bridge = new OxPHP();
         $chain = new ResetterChain($resetters);
 
-        return new class($bridge, $chain, $handler, $state) extends AbstractHttpRunner {
+        return new class ($bridge, $chain, $handler, $state) extends AbstractHttpRunner {
             public function __construct(OxPHP $b, ResetterChain $c, private $handler, private array &$stateRef)
             {
                 parent::__construct($b, $c);

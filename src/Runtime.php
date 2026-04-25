@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime;
@@ -30,8 +31,8 @@ final class Runtime extends SymfonyRuntime
     public function __construct(array $options = [])
     {
         parent::__construct($options + ['disable_dotenv' => true]);
-        $this->bridge        = new OxPHP();
-        $this->psr17         = new Psr17FactoryLocator($options['psr17_factory'] ?? null);
+        $this->bridge = new OxPHP();
+        $this->psr17 = new Psr17FactoryLocator($options['psr17_factory'] ?? null);
         $this->userResetters = \array_values($options['resetters'] ?? []);
     }
 
@@ -61,8 +62,8 @@ final class Runtime extends SymfonyRuntime
 
             default => throw new \LogicException(\sprintf(
                 'OxPHP Runtime does not support application of type "%s". '
-                .'Supported: PSR-15 RequestHandler, Laravel Http Kernel, '
-                .'Symfony HttpKernel, HttpFoundation Response, PSR-7 Response.',
+                . 'Supported: PSR-15 RequestHandler, Laravel Http Kernel, '
+                . 'Symfony HttpKernel, HttpFoundation Response, PSR-7 Response.',
                 \get_debug_type($application),
             )),
         };

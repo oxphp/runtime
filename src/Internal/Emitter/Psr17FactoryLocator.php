@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Emitter;
@@ -34,7 +35,9 @@ final class Psr17FactoryLocator
         }
 
         foreach ($this->candidates ?? self::defaultCandidates() as $fqcn) {
-            if (!\class_exists($fqcn)) { continue; }
+            if (!\class_exists($fqcn)) {
+                continue;
+            }
             return $this->build($fqcn);
         }
 

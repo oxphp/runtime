@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Stub\Apps;
@@ -22,7 +23,7 @@ final class FakePsr15Handler implements RequestHandlerInterface
             return $f
                 ->createResponse(200)
                 ->withHeader('Content-Type', 'text/plain')
-                ->withBody($f->createStream('psr15:'.$req->getUri()->getPath()));
+                ->withBody($f->createStream('psr15:' . $req->getUri()->getPath()));
         });
     }
 

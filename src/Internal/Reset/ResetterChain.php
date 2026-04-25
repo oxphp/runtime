@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Reset;
@@ -21,10 +22,13 @@ final class ResetterChain
     {
         foreach ($this->resetters as $r) {
             try {
-                if ($r instanceof ResetterInterface) { $r->reset(); }
-                else                                 { $r(); }
+                if ($r instanceof ResetterInterface) {
+                    $r->reset();
+                } else {
+                    $r();
+                }
             } catch (\Throwable $e) {
-                \error_log('OxPHP resetter failed: '.$e);
+                \error_log('OxPHP resetter failed: ' . $e);
             }
         }
     }

@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Internal\Reset;
@@ -13,13 +14,18 @@ final class ResetterChainTest extends TestCase
     {
         $calls = [];
 
-        $r1 = new class($calls) implements ResetterInterface {
+        $r1 = new class ($calls) implements ResetterInterface {
             public function __construct(private array &$calls) {}
-            public function reset(): void { $this->calls[] = 'r1'; }
+            public function reset(): void
+            {
+                $this->calls[] = 'r1';
+            }
         };
-        $r2 = static function () use (&$calls): void { $calls[] = 'r2'; };
+        $r2 = static function () use (&$calls): void {
+            $calls[] = 'r2';
+        };
 
-        (new ResetterChain([$r1, $r2]))->reset();
+        new ResetterChain([$r1, $r2])->reset();
 
         self::assertSame(['r1', 'r2'], $calls);
     }
@@ -28,11 +34,19 @@ final class ResetterChainTest extends TestCase
     {
         $calls = [];
         $chain = new ResetterChain([
-            static function () use (&$calls): void { $calls[] = 'before'; throw new \RuntimeException('boom'); },
-            static function () use (&$calls): void { $calls[] = 'after'; },
+            static function () use (&$calls): void {
+                $calls[] = 'before';
+                throw new \RuntimeException('boom');
+            },
+            static function () use (&$calls): void {
+                $calls[] = 'after';
+            },
         ]);
 
-        try { $chain->reset(); } catch (\RuntimeException) { /* aggregated below */ }
+        try {
+            $chain->reset();
+        } catch (\RuntimeException) { /* aggregated below */
+        }
 
         // Design choice: per spec section 8 each resetter must run; exceptions
         // are logged but not re-thrown, so the chain always completes.
@@ -41,7 +55,7 @@ final class ResetterChainTest extends TestCase
 
     public function test_empty_chain_is_noop(): void
     {
-        (new ResetterChain([]))->reset();
+        new ResetterChain([])->reset();
         self::assertTrue(true);
     }
 }

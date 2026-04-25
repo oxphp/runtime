@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Runner;
@@ -56,13 +57,19 @@ final class HttpFoundationResponseRunner implements RunnerInterface
     /** @return \Generator<string> */
     private function driveStreamedCallback(StreamedResponse $response): \Generator
     {
-        $callback = (function (): ?\Closure { return $this->callback; })->call($response);
-        if ($callback === null) { return; }
+        $callback = (function (): ?\Closure {
+            return $this->callback;
+        })->call($response);
+        if ($callback === null) {
+            return;
+        }
 
         // ob_start chunk handler: every flush from user code becomes a chunk.
         $chunks = [];
         \ob_start(static function (string $buffer) use (&$chunks): string {
-            if ($buffer !== '') { $chunks[] = $buffer; }
+            if ($buffer !== '') {
+                $chunks[] = $buffer;
+            }
             return '';
         }, 1);
 

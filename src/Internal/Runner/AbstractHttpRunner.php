@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Runner;
@@ -74,7 +75,7 @@ abstract class AbstractHttpRunner implements RunnerInterface
             \http_response_code(500);
             \header('Content-Type: text/plain; charset=utf-8');
         }
-        \error_log('OxPHP runtime unhandled exception: '.$e);
+        \error_log('OxPHP runtime unhandled exception: ' . $e);
         echo "Internal Server Error\n";
     }
 }

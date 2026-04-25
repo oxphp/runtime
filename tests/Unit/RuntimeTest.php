@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit;
@@ -27,36 +28,36 @@ final class RuntimeTest extends TestCase
     public function test_dispatches_psr15_handler_to_psr15_runner(): void
     {
         $runtime = new Runtime();
-        $runner  = $runtime->getRunner(FakePsr15Handler::echoingPath());
+        $runner = $runtime->getRunner(FakePsr15Handler::echoingPath());
         self::assertInstanceOf(Psr15Runner::class, $runner);
     }
 
     public function test_dispatches_laravel_kernel_to_laravel_runner(): void
     {
         $runtime = new Runtime();
-        $runner  = $runtime->getRunner(FakeLaravelKernel::echoingPath());
+        $runner = $runtime->getRunner(FakeLaravelKernel::echoingPath());
         self::assertInstanceOf(LaravelRunner::class, $runner);
     }
 
     public function test_dispatches_symfony_kernel_to_http_kernel_runner(): void
     {
         $runtime = new Runtime();
-        $runner  = $runtime->getRunner(FakeSymfonyKernel::echoingPath());
+        $runner = $runtime->getRunner(FakeSymfonyKernel::echoingPath());
         self::assertInstanceOf(HttpKernelRunner::class, $runner);
     }
 
     public function test_dispatches_http_foundation_response(): void
     {
         $runtime = new Runtime();
-        $runner  = $runtime->getRunner(new Response('x'));
+        $runner = $runtime->getRunner(new Response('x'));
         self::assertInstanceOf(HttpFoundationResponseRunner::class, $runner);
     }
 
     public function test_dispatches_psr7_response(): void
     {
         $runtime = new Runtime();
-        $response = (new Psr17Factory())->createResponse(204);
-        $runner  = $runtime->getRunner($response);
+        $response = new Psr17Factory()->createResponse(204);
+        $runner = $runtime->getRunner($response);
         self::assertInstanceOf(Psr7ResponseRunner::class, $runner);
     }
 
@@ -73,7 +74,9 @@ final class RuntimeTest extends TestCase
     public function test_resetters_option_is_forwarded_to_runners(): void
     {
         $called = 0;
-        $runtime = new Runtime(['resetters' => [static function () use (&$called): void { $called++; }]]);
+        $runtime = new Runtime(['resetters' => [static function () use (&$called): void {
+            $called++;
+        }]]);
 
         $h = OxPHPHarness::instance();
         $h->setWorker(true);
