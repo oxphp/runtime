@@ -33,7 +33,7 @@ final class HttpKernelRunner extends AbstractHttpRunner
         array $userResetters,
     ) {
         $builtin = $kernel instanceof Kernel
-            ? [new SymfonyContainerResetter($kernel->getContainer())]
+            ? [new SymfonyContainerResetter($kernel)]
             : [];
         parent::__construct($bridge, new ResetterChain([...$builtin, ...$userResetters]));
         $this->emitter = new ResponseEmitter($bridge);
