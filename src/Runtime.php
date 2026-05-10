@@ -40,7 +40,7 @@ final class Runtime extends SymfonyRuntime
     {
         // Fall back to stock Symfony runner when not running under the OxPHP SAPI
         // (e.g. dev environments using PHP-FPM or the built-in server).
-        if (!\function_exists('oxphp_server_info')) {
+        if (\PHP_SAPI === 'cli' || !\function_exists('oxphp_server_info')) {
             return parent::getRunner($application);
         }
 
