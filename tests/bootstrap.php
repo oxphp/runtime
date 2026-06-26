@@ -12,6 +12,11 @@ if (!\interface_exists(\OxPHP\Http\RequestInterface::class, false)) {
     require __DIR__ . '/polyfill/oxphp_http_interfaces.php';
 }
 
+// Declare the OxPHP\Server\Worker polyfill only when the real extension isn't loaded.
+if (!\class_exists(\OxPHP\Server\Worker::class, false)) {
+    require __DIR__ . '/polyfill/oxphp_server_worker.php';
+}
+
 // Declare stubs only when the real oxphp extension isn't loaded.
 if (!\function_exists('oxphp_http_request')) {
     function oxphp_http_request(): \OxPHP\Http\RequestInterface
