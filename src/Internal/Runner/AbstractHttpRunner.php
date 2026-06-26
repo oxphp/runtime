@@ -52,10 +52,11 @@ abstract class AbstractHttpRunner implements RunnerInterface
     {
         $this->onWorkerBoot();
 
-        // Single boot — oxphp_worker() loops internally. Each iteration gets
-        // a fresh request via the SAPI soft reset; we catch Throwable so a
-        // broken handler cannot poison the worker.
-        \oxphp_worker(function (): void {
+        // Single boot — the worker loops internally. Each iteration gets a fresh
+        // request via the SAPI soft reset; we catch Throwable so a broken handler
+        // cannot poison the worker. The bridge picks Worker::serve() or the
+        // oxphp_worker() fallback.
+        $this->bridge->serve(function (): void {
             try {
                 $this->handleRequest($this->bridge->currentRequest());
             } catch (\Throwable $e) {

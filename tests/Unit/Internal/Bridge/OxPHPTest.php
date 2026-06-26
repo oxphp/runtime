@@ -44,4 +44,36 @@ final class OxPHPTest extends TestCase
         self::assertTrue(new OxPHP()->finishRequest());
         self::assertSame(1, OxPHPHarness::instance()->finishCount());
     }
+
+    public function test_is_worker_via_class_path(): void
+    {
+        OxPHPHarness::instance()->setWorker(true);
+        self::assertTrue(new OxPHP(true)->isWorker());
+    }
+
+    public function test_is_worker_via_function_path(): void
+    {
+        OxPHPHarness::instance()->setWorker(true);
+        self::assertTrue(new OxPHP(false)->isWorker());
+    }
+
+    public function test_serve_drives_handler_via_class_path(): void
+    {
+        OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/a'));
+        $seen = 0;
+        new OxPHP(true)->serve(static function () use (&$seen): void {
+            $seen++;
+        });
+        self::assertSame(1, $seen);
+    }
+
+    public function test_serve_drives_handler_via_function_path(): void
+    {
+        OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/a'));
+        $seen = 0;
+        new OxPHP(false)->serve(static function () use (&$seen): void {
+            $seen++;
+        });
+        self::assertSame(1, $seen);
+    }
 }
