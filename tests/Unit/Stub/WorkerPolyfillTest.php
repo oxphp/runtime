@@ -33,7 +33,7 @@ final class WorkerPolyfillTest extends TestCase
     {
         OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/a'));
         $seen = 0;
-        Worker::current()->serve(function () use (&$seen): void {
+        Worker::current()->serve(static function () use (&$seen): void {
             $seen++;
         });
         self::assertSame(1, $seen);

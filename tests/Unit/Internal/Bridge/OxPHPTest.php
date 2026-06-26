@@ -61,7 +61,7 @@ final class OxPHPTest extends TestCase
     {
         OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/a'));
         $seen = 0;
-        new OxPHP(true)->serve(function () use (&$seen): void {
+        new OxPHP(true)->serve(static function () use (&$seen): void {
             $seen++;
         });
         self::assertSame(1, $seen);
@@ -71,7 +71,7 @@ final class OxPHPTest extends TestCase
     {
         OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/a'));
         $seen = 0;
-        new OxPHP(false)->serve(function () use (&$seen): void {
+        new OxPHP(false)->serve(static function () use (&$seen): void {
             $seen++;
         });
         self::assertSame(1, $seen);
