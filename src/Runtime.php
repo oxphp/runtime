@@ -39,11 +39,22 @@ final class Runtime extends SymfonyRuntime
     public function getRunner(?object $application): RunnerInterface
     {
         // Fall back to stock Symfony runner when not running under the OxPHP SAPI
-        // (e.g. dev environments using PHP-FPM or the built-in server).
+        // (e.g. CLI console commands, or dev environments using PHP-FPM or the
+        // built-in server).
         if (\PHP_SAPI === 'cli' || !\function_exists('oxphp_server_info')) {
             return parent::getRunner($application);
         }
 
+        return $this->resolveRunner($application);
+    }
+
+    /**
+     * Map the application object returned by index.php to its OxPHP runner.
+     * Separated from getRunner() so the dispatch table is unit-testable without
+     * depending on the SAPI gate.
+     */
+    private function resolveRunner(?object $application): RunnerInterface
+    {
         return match (true) {
             $application instanceof RequestHandlerInterface
                 => new Psr15Runner($application, $this->bridge, $this->psr17, $this->userResetters),

@@ -14,9 +14,11 @@ use OxPHP\Runtime\Runtime;
 use OxPHP\Runtime\Tests\Stub\Apps\FakeLaravelKernel;
 use OxPHP\Runtime\Tests\Stub\Apps\FakePsr15Handler;
 use OxPHP\Runtime\Tests\Stub\Apps\FakeSymfonyKernel;
+use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Runtime\RunnerInterface;
 
 final class RuntimeTest extends TestCase
 {
@@ -31,28 +33,28 @@ final class RuntimeTest extends TestCase
     public function test_dispatches_psr15_handler_to_psr15_runner(): void
     {
         $runtime = new Runtime(self::NO_HANDLER);
-        $runner = $runtime->getRunner(FakePsr15Handler::echoingPath());
+        $runner = $this->resolveRunner($runtime, FakePsr15Handler::echoingPath());
         self::assertInstanceOf(Psr15Runner::class, $runner);
     }
 
     public function test_dispatches_laravel_kernel_to_laravel_runner(): void
     {
         $runtime = new Runtime(self::NO_HANDLER);
-        $runner = $runtime->getRunner(FakeLaravelKernel::echoingPath());
+        $runner = $this->resolveRunner($runtime, FakeLaravelKernel::echoingPath());
         self::assertInstanceOf(LaravelRunner::class, $runner);
     }
 
     public function test_dispatches_symfony_kernel_to_http_kernel_runner(): void
     {
         $runtime = new Runtime(self::NO_HANDLER);
-        $runner = $runtime->getRunner(FakeSymfonyKernel::echoingPath());
+        $runner = $this->resolveRunner($runtime, FakeSymfonyKernel::echoingPath());
         self::assertInstanceOf(HttpKernelRunner::class, $runner);
     }
 
     public function test_dispatches_http_foundation_response(): void
     {
         $runtime = new Runtime(self::NO_HANDLER);
-        $runner = $runtime->getRunner(new Response('x'));
+        $runner = $this->resolveRunner($runtime, new Response('x'));
         self::assertInstanceOf(HttpFoundationResponseRunner::class, $runner);
     }
 
@@ -60,7 +62,7 @@ final class RuntimeTest extends TestCase
     {
         $runtime = new Runtime(self::NO_HANDLER);
         $response = new Psr17Factory()->createResponse(204);
-        $runner = $runtime->getRunner($response);
+        $runner = $this->resolveRunner($runtime, $response);
         self::assertInstanceOf(Psr7ResponseRunner::class, $runner);
     }
 
@@ -70,6 +72,19 @@ final class RuntimeTest extends TestCase
 
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('OxPHP Runtime does not support');
+
+        $this->resolveRunner($runtime, new \stdClass());
+    }
+
+    public function test_cli_sapi_falls_back_to_parent_runner(): void
+    {
+        // The suite runs under the CLI SAPI, so getRunner() must delegate to the
+        // stock Symfony runtime (its dispatch, its message) rather than the
+        // OxPHP dispatch table.
+        $runtime = new Runtime(self::NO_HANDLER);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage("doesn't know how to handle");
 
         $runtime->getRunner(new \stdClass());
     }
@@ -83,11 +98,20 @@ final class RuntimeTest extends TestCase
 
         $h = OxPHPHarness::instance();
         $h->setWorker(true);
-        $h->pushRequest(\OxPHP\Runtime\Tests\Stub\FakeOxRequest::get('/'));
+        $h->pushRequest(FakeOxRequest::get('/'));
 
-        $runner = $runtime->getRunner(FakePsr15Handler::echoingPath());
+        $runner = $this->resolveRunner($runtime, FakePsr15Handler::echoingPath());
         $runner->run();
 
         self::assertSame(1, $called);
+    }
+
+    /**
+     * Invoke Runtime::resolveRunner() directly, bypassing the SAPI gate in
+     * getRunner() so the dispatch table can be exercised under the CLI SAPI.
+     */
+    private function resolveRunner(Runtime $runtime, ?object $application): RunnerInterface
+    {
+        return new \ReflectionMethod(Runtime::class, 'resolveRunner')->invoke($runtime, $application);
     }
 }
