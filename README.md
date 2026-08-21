@@ -110,8 +110,19 @@ APP_RUNTIME_OPTIONS="{\"psr17_factory\":\"My\\\\Factory\"}"
 ## Streaming
 
 `StreamedResponse`, `StreamedJsonResponse`, and PSR-7 bodies with
-readable streams are flushed chunk-by-chunk via `oxphp_stream_flush()` —
-ideal for SSE and large payloads.
+readable streams are streamed chunk-by-chunk — ideal for SSE and large
+payloads.
+
+Streamed callbacks are driven **live**: every `echo` inside a
+`StreamedResponse` callback goes to the wire as soon as it happens —
+chunks are never collected and replayed after the callback returns. The
+runtime enables PHP's implicit flush while driving the callback, so the
+engine pushes each chunk through the OxPHP SAPI's flush hook on write;
+the callback does not need to call `flush()` itself. PSR-7 stream bodies
+are flushed per chunk via `oxphp_stream_flush()`. An exception thrown
+mid-stream closes the runtime's output buffers cleanly (bytes already
+streamed stay sent, partial buffers are discarded) and never poisons the
+worker.
 
 For "respond early, keep working" patterns use `oxphp_finish_request()`
 directly in your controller:

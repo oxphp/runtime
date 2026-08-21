@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Internal\Runner;
 
 use OxPHP\Runtime\Internal\Bridge\OxPHP;
-use OxPHP\Runtime\Internal\Emitter\ResponseEmitter;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\Runtime\RunnerInterface;
 
 /**
@@ -17,70 +15,18 @@ use Symfony\Component\Runtime\RunnerInterface;
  */
 final class HttpFoundationResponseRunner implements RunnerInterface
 {
-    private readonly ResponseEmitter $emitter;
-    private readonly OxPHP $bridge;
+    private readonly HttpFoundationResponseEmitter $emitter;
 
     public function __construct(
         private readonly Response $response,
         OxPHP $bridge,
     ) {
-        $this->bridge = $bridge;
-        $this->emitter = new ResponseEmitter($bridge);
+        $this->emitter = new HttpFoundationResponseEmitter($bridge);
     }
 
     public function run(): int
     {
-        $headers = [];
-        foreach ($this->response->headers->all() as $name => $values) {
-            $headers[$name] = $values;
-        }
-
-        if ($this->response instanceof StreamedResponse) {
-            // Drive the callback ourselves so we can flush between buffer
-            // writes rather than relying on sendContent() calling flush().
-            $this->emitter->emit(
-                $this->response->getStatusCode(),
-                $headers,
-                $this->driveStreamedCallback($this->response),
-            );
-            return 0;
-        }
-
-        $this->emitter->emit(
-            $this->response->getStatusCode(),
-            $headers,
-            (string) $this->response->getContent(),
-        );
+        $this->emitter->emit($this->response);
         return 0;
-    }
-
-    /** @return \Generator<string> */
-    private function driveStreamedCallback(StreamedResponse $response): \Generator
-    {
-        $callback = (function (): ?\Closure {
-            return $this->callback;
-        })->call($response);
-        if ($callback === null) {
-            return;
-        }
-
-        // ob_start chunk handler: every flush from user code becomes a chunk.
-        $chunks = [];
-        \ob_start(static function (string $buffer) use (&$chunks): string {
-            if ($buffer !== '') {
-                $chunks[] = $buffer;
-            }
-            return '';
-        }, 1);
-
-        try {
-            $callback();
-        } finally {
-            \ob_end_flush();
-        }
-
-        foreach ($chunks as $chunk) {
-            yield $chunk;
-        }
     }
 }
