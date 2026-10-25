@@ -30,7 +30,7 @@ final class LaravelRunner extends AbstractHttpRunner
     ) {
         parent::__construct($bridge, new ResetterChain($userResetters));
         $this->emitter = new HttpFoundationResponseEmitter($bridge);
-        $this->builder = new HttpFoundationRequestBuilder();
+        $this->builder = new HttpFoundationRequestBuilder($bridge->serverSoftware());
     }
 
     protected function handleRequest(OxRequest $ox): void

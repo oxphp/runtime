@@ -38,6 +38,18 @@ final class HttpKernelRunnerTest extends TestCase
         self::assertSame('/hello', $kernel->handled[0]->getPathInfo());
     }
 
+    public function test_request_carries_server_software(): void
+    {
+        OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/'));
+        $kernel = FakeSymfonyKernel::echoingPath();
+
+        \ob_start();
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [])->run();
+        \ob_end_clean();
+
+        self::assertSame('OxPHP/0.0.0-test', $kernel->handled[0]->server->get('SERVER_SOFTWARE'));
+    }
+
     public function test_terminate_called_after_emit_on_terminable_kernel(): void
     {
         OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/'));

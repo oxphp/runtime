@@ -34,7 +34,7 @@ final class HttpKernelRunner extends AbstractHttpRunner
             : [];
         parent::__construct($bridge, new ResetterChain([...$builtin, ...$userResetters]));
         $this->emitter = new HttpFoundationResponseEmitter($bridge);
-        $this->builder = new HttpFoundationRequestBuilder();
+        $this->builder = new HttpFoundationRequestBuilder($bridge->serverSoftware());
     }
 
     protected function handleRequest(OxRequest $ox): void

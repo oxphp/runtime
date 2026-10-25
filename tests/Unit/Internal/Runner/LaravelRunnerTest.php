@@ -35,6 +35,18 @@ final class LaravelRunnerTest extends TestCase
         self::assertSame(1, $kernel->terminated);
     }
 
+    public function test_request_carries_server_software(): void
+    {
+        OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/'));
+        $kernel = FakeLaravelKernel::echoingPath();
+
+        \ob_start();
+        new LaravelRunner($kernel, new OxPHP(), userResetters: [])->run();
+        \ob_end_clean();
+
+        self::assertSame('OxPHP/0.0.0-test', $kernel->handled[0]->server->get('SERVER_SOFTWARE'));
+    }
+
     public function test_streamed_response_interleaves_emission_with_callback(): void
     {
         OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/sse'));
