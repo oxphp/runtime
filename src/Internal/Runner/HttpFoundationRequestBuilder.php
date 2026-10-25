@@ -16,6 +16,10 @@ use Symfony\Component\HttpFoundation\Request;
  */
 final class HttpFoundationRequestBuilder
 {
+    public function __construct(
+        private readonly string $serverSoftware,
+    ) {}
+
     public function build(OxRequest $ox): Request
     {
         $server = $this->buildServer($ox);
@@ -42,6 +46,7 @@ final class HttpFoundationRequestBuilder
             'REQUEST_URI' => $uri,
             'QUERY_STRING' => $qs ?? '',
             'SERVER_PROTOCOL' => $ox->httpProtocol(),
+            'SERVER_SOFTWARE' => $this->serverSoftware,
             'HTTP_HOST' => $this->host($ox),
             'SERVER_NAME' => $ox->host(),
             'SERVER_PORT' => (string) $ox->port(),

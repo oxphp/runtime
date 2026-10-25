@@ -45,6 +45,11 @@ final class OxPHPTest extends TestCase
         self::assertSame(1, OxPHPHarness::instance()->finishCount());
     }
 
+    public function test_server_software_carries_server_version(): void
+    {
+        self::assertSame('OxPHP/0.0.0-test', new OxPHP()->serverSoftware());
+    }
+
     public function test_is_worker_via_class_path(): void
     {
         OxPHPHarness::instance()->setWorker(true);
