@@ -64,4 +64,13 @@ final class OxPHP
     {
         return \oxphp_http_request();
     }
+
+    /**
+     * The SERVER_SOFTWARE value OxPHP puts in $_SERVER ("OxPHP/<version>"),
+     * rebuilt from oxphp_server_info() because $_SERVER may be empty.
+     */
+    public function serverSoftware(): string
+    {
+        return 'OxPHP/' . \oxphp_server_info()['version'];
+    }
 }
