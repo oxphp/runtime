@@ -37,11 +37,14 @@ final class RequestScopesTest extends TestCase
 
         $body = static function (string $value) use ($owner): \Closure {
             return static function () use ($owner, $value): array {
-                $scope = RequestScopes::current();
-                $scope->set($owner, $value);
+                $before = RequestScopes::current();
+                $before->set($owner, $value);
                 \Fiber::suspend();
 
-                return [$scope, $scope->get($owner, static fn (): string => 'unset')];
+                // Resolve the scope again after the other request has entered.
+                $after = RequestScopes::current();
+
+                return [$before, $after, $after->get($owner, static fn (): string => 'unset')];
             };
         };
 
@@ -51,12 +54,14 @@ final class RequestScopesTest extends TestCase
         $a->resume();
         $b->resume();
 
-        [$scopeA, $valueA] = $a->result();
-        [$scopeB, $valueB] = $b->result();
+        [$beforeA, $afterA, $valueA] = $a->result();
+        [$beforeB, $afterB, $valueB] = $b->result();
 
         self::assertSame('a', $valueA);
         self::assertSame('b', $valueB);
-        self::assertNotSame($scopeA, $scopeB);
+        self::assertSame($beforeA, $afterA);
+        self::assertSame($beforeB, $afterB);
+        self::assertNotSame($afterA, $afterB);
     }
 
     public function test_a_recycled_fiber_starts_its_next_request_with_a_fresh_scope(): void

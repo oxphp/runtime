@@ -13,7 +13,12 @@ namespace OxPHP\Runtime\Internal\Fiber;
  */
 final class RequestScope
 {
-    /** @var \WeakMap<object, mixed> */
+    /**
+     * Each value is wrapped in a one-element array, because a WeakMap treats a
+     * stored null as absent in `offsetExists()` and a wrapped value is never null.
+     *
+     * @var \WeakMap<object, array{mixed}>
+     */
     private \WeakMap $values;
 
     public function __construct()
@@ -24,21 +29,22 @@ final class RequestScope
     /**
      * Returns the value stored for `$owner`, storing `$initial()` on first access.
      *
-     * A stored `null` counts as stored, so `$initial` runs at most once per owner.
+     * A stored `null` counts as stored, so `$initial` runs at most once per owner
+     * even when it returns `null`.
      *
      * @param \Closure(): mixed $initial
      */
     public function get(object $owner, \Closure $initial): mixed
     {
         if (!$this->values->offsetExists($owner)) {
-            $this->values[$owner] = $initial();
+            $this->values[$owner] = [$initial()];
         }
 
-        return $this->values[$owner];
+        return $this->values[$owner][0];
     }
 
     public function set(object $owner, mixed $value): void
     {
-        $this->values[$owner] = $value;
+        $this->values[$owner] = [$value];
     }
 }
