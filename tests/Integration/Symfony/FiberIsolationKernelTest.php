@@ -126,6 +126,26 @@ final class FiberIsolationKernelTest extends TestCase
         $this->bootKernel();
 
         $a = $this->startRequest(Request::create('/en/hello?suspend=1'));
+        $b = $this->startRequest(Request::create('/ru/hello?suspend=1'));
+
+        // A resumes first, while B is still in flight: without the bundle A renders
+        // in B's locale. In the other order stock Symfony passes too, because B
+        // finishes first and its `kernel.finish_request` listeners restore the
+        // locale of the request under it on the shared stack, which is A.
+        $a->resume();
+
+        self::assertSame('Hello|en|en', self::content($a));
+
+        $b->resume();
+
+        self::assertSame('Привет|ru|ru', self::content($b));
+    }
+
+    public function test_locale_survives_another_request_finishing(): void
+    {
+        $this->bootKernel();
+
+        $a = $this->startRequest(Request::create('/en/hello?suspend=1'));
         $b = $this->startRequest(Request::create('/ru/hello'));
 
         self::assertSame('Привет|ru|ru', self::content($b));
