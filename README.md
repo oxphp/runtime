@@ -16,7 +16,7 @@ auto-detected when the container is resolved.
   Worker mode needs OxPHP **0.11.0+**: older servers ignore the response
   status in worker mode and answer every request `200` (redirects and 404s
   included). Traditional mode works on any version.
-- `symfony/runtime` `^6.4 || ^7.0`
+- `symfony/runtime` `^6.4 || ^7.0 || ^8.0`
 
 ## Installation
 
