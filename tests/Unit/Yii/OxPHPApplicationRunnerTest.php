@@ -95,6 +95,20 @@ final class OxPHPApplicationRunnerTest extends TestCase
         self::assertNotContains('ApplicationStartup', EventLog::$events);
     }
 
+    public function test_a_bootstrap_entry_that_is_not_callable_fails_at_boot_before_any_request(): void
+    {
+        OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/', ['route' => 'r']));
+        $config = YiiFixture::config(bootstrap: [static function (): void {}, 'no_such_function']);
+
+        $e = $this->thrown(fn () => $this->underOxPHP($this->runner($config)));
+
+        // BootstrapRunner's exception and wording, which a request would get otherwise.
+        self::assertInstanceOf(\RuntimeException::class, $e);
+        self::assertSame('Bootstrap callback must be callable, "string" given.', $e->getMessage());
+        self::assertSame([], OxPHPHarness::instance()->capturedOutputs());
+        self::assertNotContains('ApplicationStartup', EventLog::$events);
+    }
+
     /**
      * @return iterable<string, array{bool, list<string>, string}>
      */

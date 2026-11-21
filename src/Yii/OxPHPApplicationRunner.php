@@ -206,6 +206,12 @@ final class OxPHPApplicationRunner extends ApplicationRunner
 
         // Read at boot: `yiisoft/config` builds a group on its first read, so a broken file fails before start().
         $bootstrapList = $this->getConfiguration($this->bootstrapGroup) ?? [];
+        // Every request's `BootstrapRunner` would throw this; one throw at boot fails the worker instead.
+        foreach ($bootstrapList as $callback) {
+            if (!\is_callable($callback)) {
+                throw new \RuntimeException(\sprintf('Bootstrap callback must be callable, "%s" given.', \get_debug_type($callback)));
+            }
+        }
 
         /** @var Application $application */
         $application = $boot->get(Application::class);
