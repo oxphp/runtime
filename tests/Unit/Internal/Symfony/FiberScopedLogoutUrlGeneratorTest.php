@@ -6,10 +6,12 @@ namespace OxPHP\Runtime\Tests\Unit\Internal\Symfony;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedLogoutUrlGenerator;
+use OxPHP\Runtime\Internal\Symfony\FiberScopedTokenStorage;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\RequestStack;
+use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
 use Symfony\Component\Security\Http\Logout\LogoutUrlGenerator;
 
 final class FiberScopedLogoutUrlGeneratorTest extends TestCase
@@ -75,6 +77,36 @@ final class FiberScopedLogoutUrlGeneratorTest extends TestCase
 
         self::assertSame(['/logout', 'http://localhost/logout'], $a->result());
         self::assertSame(['/admin/logout', 'http://localhost/admin/logout'], $b->result());
+    }
+
+    public function test_a_lazy_token_initializer_that_suspends_does_not_let_another_request_swap_the_firewall(): void
+    {
+        $tokenStorage = new FiberScopedTokenStorage();
+        $generator = self::generator($tokenStorage);
+        $generator->registerListener('admin', '/admin/logout', null, null);
+
+        // Like a lazy firewall: reading the token runs an initializer that does hooked I/O.
+        $a = RequestFiber::start(static function () use ($generator, $tokenStorage): string {
+            $generator->setCurrentFirewall('main');
+            $tokenStorage->setInitializer(static function (): void {
+                \Fiber::suspend();
+            });
+
+            // The parent resolves the firewall from the token storage first; this
+            // suspends inside that read, while request B runs.
+            return $generator->getLogoutPath();
+        });
+
+        $b = RequestFiber::start(static function () use ($generator): string {
+            $generator->setCurrentFirewall('admin');
+
+            return $generator->getLogoutPath();
+        });
+
+        $a->resume();
+
+        self::assertSame('/admin/logout', $b->result());
+        self::assertSame('/logout', $a->result());
     }
 
     public function test_without_a_current_firewall_it_still_throws_like_stock(): void
@@ -180,12 +212,12 @@ final class FiberScopedLogoutUrlGeneratorTest extends TestCase
         self::assertSame(['/logout', '/logout'], $request->result());
     }
 
-    private static function generator(): FiberScopedLogoutUrlGenerator
+    private static function generator(?TokenStorageInterface $tokenStorage = null): FiberScopedLogoutUrlGenerator
     {
         $requestStack = new RequestStack();
         $requestStack->push(Request::create('/'));
 
-        $generator = new FiberScopedLogoutUrlGenerator($requestStack);
+        $generator = new FiberScopedLogoutUrlGenerator($requestStack, null, $tokenStorage);
         $generator->registerListener('main', '/logout', null, null);
 
         return $generator;

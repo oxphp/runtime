@@ -21,9 +21,20 @@ use Symfony\Component\Security\Http\Logout\LogoutUrlGenerator;
  *
  * The getters apply the scope's firewall to the parent with
  * `parent::setCurrentFirewall()` immediately before calling the parent getter.
- * That is safe because generating a URL never suspends the fiber: under
- * cooperative scheduling no other request runs between the two calls, so the
- * parent's private fields only ever hold the value this call just wrote.
+ * That is safe only if the parent does not suspend between that call and the
+ * point where it reads the firewall fields. The parent's `getListener()` reads
+ * them last: when `$key` is null it first calls `$tokenStorage->getToken()`, and
+ * on a lazy firewall that runs the storage's initializer, which loads the token
+ * through the firewall listeners (session read, `refreshUser()`), hooked I/O
+ * that can suspend the fiber. So when `$key` is null the getters call
+ * `$tokenStorage->getToken()` themselves *before* applying the scope. The
+ * initializer has then already run, and the parent's own `getToken()` call is a
+ * plain read that does not suspend. With a key, or after that pre-read, nothing
+ * between `applyScope()` and the last read of the fields suspends (the CSRF
+ * token, router and request stack are only touched afterwards, once the
+ * listener is resolved), so under cooperative scheduling no other request can
+ * overwrite the parent's fields in between. A throwing initializer throws from
+ * the pre-read exactly as it would from the parent's call.
  *
  * `registerListener()` is not overridden. Listeners are configuration, written
  * while the container builds the service, and stay shared.
@@ -40,12 +51,19 @@ final class FiberScopedLogoutUrlGenerator extends LogoutUrlGenerator
 {
     private object $token;
 
+    /**
+     * The parent keeps its own copy of `$tokenStorage` private, and the getters
+     * need this one to run a lazy initializer before applying the scope.
+     */
+    private readonly ?TokenStorageInterface $tokenStorage;
+
     public function __construct(
         ?RequestStack $requestStack = null,
         ?UrlGeneratorInterface $router = null,
         ?TokenStorageInterface $tokenStorage = null,
     ) {
         $this->token = new \stdClass();
+        $this->tokenStorage = $tokenStorage;
 
         parent::__construct($requestStack, $router, $tokenStorage);
     }
@@ -70,14 +88,14 @@ final class FiberScopedLogoutUrlGenerator extends LogoutUrlGenerator
 
     public function getLogoutPath(?string $key = null): string
     {
-        $this->applyScope();
+        $this->prepare($key);
 
         return parent::getLogoutPath($key);
     }
 
     public function getLogoutUrl(?string $key = null): string
     {
-        $this->applyScope();
+        $this->prepare($key);
 
         return parent::getLogoutUrl($key);
     }
@@ -85,6 +103,20 @@ final class FiberScopedLogoutUrlGenerator extends LogoutUrlGenerator
     public function reset(): void
     {
         RequestScopes::current()->set($this->token, [null, null]);
+    }
+
+    /**
+     * Readies the parent for a getter call: runs a lazy token initializer first
+     * when the parent would, then copies the caller's firewall into its fields.
+     */
+    private function prepare(?string $key): void
+    {
+        if ($key === null) {
+            // May suspend inside a lazy initializer; the scope is applied only after it returns.
+            $this->tokenStorage?->getToken();
+        }
+
+        $this->applyScope();
     }
 
     /**

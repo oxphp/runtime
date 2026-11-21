@@ -15,7 +15,9 @@ final class OverrideCheck
 {
     /**
      * Names of the public, non-static methods of `$parent` (`__construct`
-     * excluded) that `$subclass` does not declare itself.
+     * excluded) that `$subclass` does not declare itself. `$subclass` need not
+     * extend `$parent`: a decorator of a final class is checked the same way,
+     * and a method it lacks altogether counts as missing.
      *
      * @param class-string $subclass
      * @param class-string $parent
@@ -35,7 +37,7 @@ final class OverrideCheck
                 continue;
             }
 
-            if (new \ReflectionMethod($subclass, $name)->getDeclaringClass()->getName() !== $subclassName) {
+            if (!\method_exists($subclass, $name) || new \ReflectionMethod($subclass, $name)->getDeclaringClass()->getName() !== $subclassName) {
                 $missing[] = $name;
             }
         }

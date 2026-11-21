@@ -9,6 +9,7 @@ use OxPHP\Runtime\Internal\Symfony\FiberScopedLogoutUrlGenerator;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestContext;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestStack;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTokenStorage;
+use OxPHP\Runtime\Internal\Symfony\FiberScopedUsageTrackingTokenStorage;
 use OxPHP\Runtime\Internal\Symfony\OverrideCheck;
 use OxPHP\Runtime\Tests\Stub\OverrideCheck\ChildFixture;
 use OxPHP\Runtime\Tests\Stub\OverrideCheck\ParentFixture;
@@ -16,6 +17,7 @@ use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\Routing\RequestContext;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
+use Symfony\Component\Security\Core\Authentication\Token\Storage\UsageTrackingTokenStorage;
 use Symfony\Component\Security\Http\Logout\LogoutUrlGenerator;
 
 final class OverrideCheckTest extends TestCase
@@ -36,11 +38,22 @@ final class OverrideCheckTest extends TestCase
         self::assertSame([], OverrideCheck::missing(ChildFixture::class, ParentFixture::class, ['b']));
     }
 
+    public function test_a_class_that_does_not_extend_the_reference_is_missing_what_it_lacks(): void
+    {
+        $standalone = new class () {
+            public function a(): void {}
+        };
+
+        self::assertSame(['b'], OverrideCheck::missing($standalone::class, ParentFixture::class));
+    }
+
     public function test_shipped_subclasses_override_every_stateful_method(): void
     {
         self::assertSame([], OverrideCheck::missing(FiberScopedRequestStack::class, RequestStack::class, ['resetRequestFormats']));
         self::assertSame([], OverrideCheck::missing(FiberScopedRequestContext::class, RequestContext::class));
         self::assertSame([], OverrideCheck::missing(FiberScopedTokenStorage::class, TokenStorage::class));
         self::assertSame([], OverrideCheck::missing(FiberScopedLogoutUrlGenerator::class, LogoutUrlGenerator::class, ['registerListener']));
+        // `UsageTrackingTokenStorage` is final, so its scoped counterpart is a decorator, not a subclass.
+        self::assertSame([], OverrideCheck::missing(FiberScopedUsageTrackingTokenStorage::class, UsageTrackingTokenStorage::class));
     }
 }

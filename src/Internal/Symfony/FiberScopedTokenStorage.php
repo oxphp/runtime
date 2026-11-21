@@ -20,8 +20,9 @@ use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
  * `clone $storage` can mint a new token and give the clone a copy of the current
  * scope's storage, as `FiberScopedRequestStack` does.
  *
- * `UsageTrackingTokenStorage`, which wraps this service, keeps its usage-tracking
- * flag shared. Every request's firewall enables it, so the shared flag is harmless.
+ * `UsageTrackingTokenStorage`, which wraps this service, has its own usage-tracking
+ * flag, which is per-request state too; `FiberScopedUsageTrackingTokenStorage`
+ * scopes it.
  *
  * Outside worker mode there is a single shared scope, so this behaves exactly
  * like a stock `TokenStorage`.
