@@ -44,13 +44,9 @@
         "yiisoft/yii-runner-http": "Required to run Yii 3 applications with OxPHP\\Runtime\\Yii\\OxPHPApplicationRunner: it brings yiisoft/yii-runner, yiisoft/error-handler, yiisoft/yii-http and psr/log, which it uses under OxPHP, and is the runner it falls back to outside the OxPHP SAPI"
     },
     "conflict": {
-        "yiisoft/config": "<1.6",
-        "yiisoft/definitions": "<3.4",
-        "yiisoft/di": "<1.4",
-        "yiisoft/error-handler": "<4.3",
-        "yiisoft/yii-http": "<1.1",
-        "yiisoft/yii-runner": "<2.2",
-        "yiisoft/yii-runner-http": "<3.2"
+        "yiisoft/di": "<1.4 || >=2.0",
+        "yiisoft/yii-runner": "<2.2 || >=3.0",
+        "yiisoft/yii-runner-http": "<3.2 || >=4.0"
     },
     "autoload": {
         "psr-4": { "OxPHP\\Runtime\\": "src/" }

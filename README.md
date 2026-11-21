@@ -448,8 +448,15 @@ per-request service when it is a dependency.
 
 ### Tested versions
 
-`yiisoft/yii-runner` 2.2, `yiisoft/yii-runner-http` 3.2, `yiisoft/yii-http` 1.1,
-`yiisoft/di` 1.4.
+Composer enforces a range only for the packages whose internals the runner
+relies on: `yiisoft/yii-runner` 2.2 up to 3.0, `yiisoft/yii-runner-http` 3.2 up
+to 4.0 and `yiisoft/di` 1.4 up to 2.0 (each upper bound excluded).
+
+Tested with `yiisoft/yii-runner` 2.2, `yiisoft/yii-runner-http` 3.2,
+`yiisoft/di` 1.4, `yiisoft/yii-http` 1.1, `yiisoft/config` 1.6,
+`yiisoft/definitions` 3.4 and `yiisoft/error-handler` 4.3. The last four aren't
+enforced: they're general-purpose libraries, and a conflict on them would also
+block an older version in an app that doesn't use the Yii runner.
 
 ## License
 
