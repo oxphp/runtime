@@ -7,10 +7,10 @@ namespace OxPHP\Runtime\Internal\Symfony;
 use Symfony\Component\DependencyInjection\ServicesResetterInterface;
 
 /**
- * @internal The `services_resetter` guard for symfony/dependency-injection 8.1 or later.
+ * @internal The guard for a `services_resetter` that implements symfony/dependency-injection's `ServicesResetterInterface`.
  *
- * `ServicesResetterInterface` exists in symfony/dependency-injection only from 8.1.
- * Autoload this class only when it exists; the compiler pass that installs it
- * guarantees that.
+ * That interface exists only from symfony/dependency-injection 8.1. Autoload this
+ * class only when it exists; the compiler pass installs it only for a
+ * `services_resetter` class that implements it.
  */
 final class GuardedServicesResetter extends AbstractGuardedServicesResetter implements ServicesResetterInterface {}

@@ -28,16 +28,20 @@ use Symfony\Contracts\Translation\TranslatorInterface;
  * All or nothing: the pass first collects every reason a present service can't be
  * scoped safely (a custom class `setClass()` would clobber, a public method the
  * scoped class doesn't declare on this Symfony version, a context listener without
- * SecurityBundle's static response listener, symfony/http-kernel < 7.3). With any
+ * SecurityBundle's static response listener, a `services_resetter` class that
+ * implements neither `ServicesResetterInterface`, symfony/http-kernel < 7.3). With any
  * reason it changes nothing, sets `oxphp_runtime.fiber_isolation` to `false` and
  * records the reasons in `oxphp_runtime.fiber_isolation_reason` and the container
  * log, so the runner keeps its full teardown. Otherwise it installs every scoped
  * service and sets the marker to `true`. A missing service id is skipped: routing,
  * SecurityBundle and the translator are all optional.
  *
- * The `services_resetter` guard is `GuardedServicesResetter` on
- * symfony/dependency-injection 8.1 or later, which moved `ServicesResetterInterface`
- * there, and `LegacyGuardedServicesResetter` on symfony/http-kernel 7.3 to 8.0.
+ * The `services_resetter` guard follows the interface the decorated class implements:
+ * `GuardedServicesResetter` for symfony/dependency-injection's (8.1 moved
+ * `ServicesResetterInterface` there), `LegacyGuardedServicesResetter` for
+ * symfony/http-kernel's (7.3 to 8.0). Which one Symfony registers depends on the
+ * bundles, not only on the installed DependencyInjection: FrameworkBundle 8.0 with
+ * DependencyInjection 8.1 still registers HttpKernel's.
  *
  * It never fails the build, so `cache:warmup` keeps working after a Symfony upgrade.
  */
@@ -71,7 +75,9 @@ final class FiberIsolationPass implements CompilerPassInterface
         // Must stay first. Each guard implements one of these interfaces, and the
         // checks below autoload and reflect the scoped classes: on http-kernel < 7.3
         // none of them may be touched. DependencyInjection's interface is checked
-        // first: from 8.1 autoloading HttpKernel's triggers a deprecation.
+        // first: from 8.1 autoloading HttpKernel's triggers a deprecation. The guard
+        // picked here is only kept for an aliased `services_resetter`; for a
+        // definition, `servicesResetter()` picks it by the class.
         if (\interface_exists(ServicesResetterInterface::class)) {
             $resetter = GuardedServicesResetter::class;
         } elseif (\interface_exists(LegacyServicesResetterInterface::class)) {
@@ -91,6 +97,7 @@ final class FiberIsolationPass implements CompilerPassInterface
             ...self::contextListeners($container),
             ...self::translator($container),
             ...self::replaceable($container, 'translation.locale_switcher'),
+            ...self::servicesResetter($container, $resetter),
         ];
 
         if ($reasons !== []) {
@@ -215,6 +222,52 @@ final class FiberIsolationPass implements CompilerPassInterface
         }
 
         return [];
+    }
+
+    /**
+     * Picks the guard by the interface the `services_resetter` class implements, which
+     * is the type the guard must keep for whatever is wired with that service.
+     * `is_a()` doesn't autoload the interface, so on http-kernel 8.1 HttpKernel's
+     * deprecated one stays unloaded: DependencyInjection's `ServicesResetter` doesn't
+     * implement it. An alias or a missing service leaves `$resetter` as it is.
+     *
+     * @param class-string<AbstractGuardedServicesResetter> $resetter
+     *
+     * @param-out class-string<AbstractGuardedServicesResetter> $resetter
+     *
+     * @return list<string>
+     */
+    private static function servicesResetter(ContainerBuilder $container, string &$resetter): array
+    {
+        $id = 'services_resetter';
+
+        if (!$container->hasDefinition($id)) {
+            return [];
+        }
+
+        $class = self::classOf($container, $id);
+
+        if ($class === null) {
+            return [\sprintf('service "%s" has no class', $id)];
+        }
+
+        if (!\class_exists($class)) {
+            return [\sprintf('service "%s" uses %s, which does not exist', $id, $class)];
+        }
+
+        if (\is_a($class, ServicesResetterInterface::class, true)) {
+            $resetter = GuardedServicesResetter::class;
+
+            return [];
+        }
+
+        if (\is_a($class, LegacyServicesResetterInterface::class, true)) {
+            $resetter = LegacyGuardedServicesResetter::class;
+
+            return [];
+        }
+
+        return [\sprintf('service "%s" uses %s, which implements neither %s nor %s', $id, $class, ServicesResetterInterface::class, LegacyServicesResetterInterface::class)];
     }
 
     /**

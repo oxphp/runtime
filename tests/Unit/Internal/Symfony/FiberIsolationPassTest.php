@@ -13,9 +13,15 @@ use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestStack;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTokenStorage;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTranslator;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedUsageTrackingTokenStorage;
+use OxPHP\Runtime\Internal\Symfony\GuardedServicesResetter;
+use OxPHP\Runtime\Internal\Symfony\LegacyGuardedServicesResetter;
 use OxPHP\Runtime\Tests\Stub\InstalledServicesResetter;
 use OxPHP\Runtime\Tests\Stub\LocaleAwareConsumer;
+use OxPHP\Runtime\Tests\Stub\ServicesResetter\DependencyInjectionResetter;
+use OxPHP\Runtime\Tests\Stub\ServicesResetter\HttpKernelResetter;
+use OxPHP\Runtime\Tests\Stub\ServicesResetter\PlainResetter;
 use OxPHP\Runtime\Tests\Stub\TranslatorConsumer;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\DependencyInjection\Argument\IteratorArgument;
 use Symfony\Component\DependencyInjection\Argument\ServiceLocatorArgument;
@@ -311,6 +317,90 @@ final class FiberIsolationPassTest extends TestCase
         self::assertTrue($c->getParameter('oxphp_runtime.fiber_isolation'));
         self::assertFalse($c->has('services_resetter'));
         self::assertFalse($c->has('oxphp_runtime.services_resetter'));
+    }
+
+    public function test_a_services_resetter_with_the_http_kernel_interface_gets_the_legacy_guard(): void
+    {
+        if (!InstalledServicesResetter::inHttpKernel()) {
+            self::markTestSkipped('Needs symfony/http-kernel 7.3 to 8.0: its ServicesResetterInterface is missing before 7.3 and deprecated from 8.1.');
+        }
+
+        $c = self::stockContainer();
+        $c->getDefinition('services_resetter')->setClass(HttpKernelResetter::class)->setArguments([]);
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertTrue($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame(LegacyGuardedServicesResetter::class, $c->getDefinition('oxphp_runtime.services_resetter')->getClass());
+
+        $c->compile();
+
+        self::assertInstanceOf(LegacyGuardedServicesResetter::class, $c->get('services_resetter'));
+    }
+
+    public function test_a_services_resetter_with_the_dependency_injection_interface_gets_the_guard(): void
+    {
+        if (!InstalledServicesResetter::inDependencyInjection()) {
+            self::markTestSkipped('symfony/dependency-injection < 8.1 has no ServicesResetterInterface.');
+        }
+
+        $c = self::stockContainer();
+        $c->getDefinition('services_resetter')->setClass(DependencyInjectionResetter::class)->setArguments([]);
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertTrue($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame(GuardedServicesResetter::class, $c->getDefinition('oxphp_runtime.services_resetter')->getClass());
+
+        $c->compile();
+
+        self::assertInstanceOf(GuardedServicesResetter::class, $c->get('services_resetter'));
+    }
+
+    public function test_a_services_resetter_with_neither_interface_withholds_isolation_and_changes_nothing(): void
+    {
+        $c = self::stockContainer();
+        $c->getDefinition('services_resetter')->setClass(PlainResetter::class)->setArguments([]);
+        $definitions = \serialize($c->getDefinitions());
+        $aliases = \serialize($c->getAliases());
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertFalse($c->getParameter('oxphp_runtime.fiber_isolation'));
+        $reason = $c->getParameter('oxphp_runtime.fiber_isolation_reason');
+        self::assertSame(
+            'service "services_resetter" uses OxPHP\Runtime\Tests\Stub\ServicesResetter\PlainResetter, which implements neither '
+            . 'Symfony\Component\DependencyInjection\ServicesResetterInterface nor Symfony\Component\HttpKernel\DependencyInjection\ServicesResetterInterface',
+            $reason,
+        );
+        self::assertSame([FiberIsolationPass::class . ': ' . $reason], self::passLog($c));
+
+        self::assertFalse($c->hasDefinition('oxphp_runtime.services_resetter'));
+        self::assertSame($definitions, \serialize($c->getDefinitions()));
+        self::assertSame($aliases, \serialize($c->getAliases()));
+    }
+
+    /**
+     * @return iterable<string, array{?string, string}>
+     */
+    public static function provideA_services_resetter_without_a_loadable_class_withholds_isolationCases(): iterable
+    {
+        yield 'missing class' => ['App\MissingResetter', 'service "services_resetter" uses App\MissingResetter, which does not exist'];
+
+        yield 'no class' => [null, 'service "services_resetter" has no class'];
+    }
+
+    #[DataProvider('provideA_services_resetter_without_a_loadable_class_withholds_isolationCases')]
+    public function test_a_services_resetter_without_a_loadable_class_withholds_isolation(?string $class, string $reason): void
+    {
+        $c = self::stockContainer();
+        $c->getDefinition('services_resetter')->setClass($class);
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertFalse($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame($reason, $c->getParameter('oxphp_runtime.fiber_isolation_reason'));
+        self::assertFalse($c->hasDefinition('oxphp_runtime.services_resetter'));
     }
 
     /**

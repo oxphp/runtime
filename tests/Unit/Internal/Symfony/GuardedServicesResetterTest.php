@@ -18,9 +18,9 @@ use Symfony\Component\HttpKernel\DependencyInjection\ServicesResetterInterface a
 use Symfony\Contracts\Service\ResetInterface;
 
 /**
- * The guard logic runs against the guard the installed Symfony gets. HttpKernel's
- * `ServicesResetterInterface` is only autoloaded when DependencyInjection has none
- * (before 8.1): from 8.1 loading it triggers a deprecation.
+ * The guard logic runs against a guard the installed Symfony can load. HttpKernel's
+ * `ServicesResetterInterface` is only autoloaded on http-kernel 7.3 to 8.0: from
+ * 8.1 loading it triggers a deprecation.
  */
 final class GuardedServicesResetterTest extends TestCase
 {
@@ -47,12 +47,8 @@ final class GuardedServicesResetterTest extends TestCase
 
     public function test_the_legacy_guard_decorates_the_http_kernel_services_resetter(): void
     {
-        if (InstalledServicesResetter::inDependencyInjection()) {
-            self::markTestSkipped('symfony/dependency-injection 8.1 or later uses GuardedServicesResetter; HttpKernel\'s deprecated ServicesResetterInterface is not loaded.');
-        }
-
-        if (!\interface_exists(LegacyServicesResetterInterface::class)) {
-            self::markTestSkipped('symfony/http-kernel < 7.3 has no ServicesResetterInterface.');
+        if (!InstalledServicesResetter::inHttpKernel()) {
+            self::markTestSkipped('Needs symfony/http-kernel 7.3 to 8.0: its ServicesResetterInterface is missing before 7.3 and deprecated from 8.1.');
         }
 
         $guarded = new LegacyGuardedServicesResetter(new LegacyServicesResetter(new \ArrayIterator([]), []));
