@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Unit\Internal\Yii;
 
 use OxPHP\Runtime\Internal\Yii\ContainerReferenceFinder;
+use OxPHP\Runtime\Tests\Stub\Yii\Guard\LazyService;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Yiisoft\Di\Container;
 use Yiisoft\Injector\Injector;
@@ -270,6 +272,60 @@ final class ContainerReferenceFinderTest extends TestCase
             public function __construct(public object $g) {}
         }));
         self::assertTrue(new \ReflectionClass(Holder::class)->isUninitializedLazyObject($ghost));
+    }
+
+    /**
+     * @return iterable<string, array{\Closure(Container): object, string}>
+     */
+    public static function provideFinds_a_container_kept_by_an_uninitialized_lazy_object_without_initializing_itCases(): iterable
+    {
+        $class = new \ReflectionClass(LazyService::class);
+
+        yield 'in the closure of a ghost' => [
+            static fn (Container $container): object => $class->newLazyGhost(static function (LazyService $s) use ($container): void {
+                $s->value = $container;
+            }),
+            '->g{initializer}{use $container}',
+        ];
+        yield 'in the factory of a proxy' => [
+            static fn (Container $container): object => $class->newLazyProxy(static function () use ($container): LazyService {
+                $s = new LazyService();
+                $s->value = $container;
+
+                return $s;
+            }),
+            '->g{initializer}{use $container}',
+        ];
+        yield 'in an initializer that is an object and a method' => [
+            static fn (Container $container): object => $class->newLazyGhost([LazyService::factory($container), 'initialize']),
+            '->g{initializer}[0]->held',
+        ];
+        yield 'in a property set before initialization' => [
+            static function (Container $container) use ($class): object {
+                $ghost = $class->newLazyGhost(static function (): void {});
+                $class->getProperty('value')->setRawValueWithoutLazyInitialization($ghost, $container);
+
+                return $ghost;
+            },
+            '->g->value',
+        ];
+    }
+
+    /**
+     * @param \Closure(Container): object $make
+     */
+    #[DataProvider('provideFinds_a_container_kept_by_an_uninitialized_lazy_object_without_initializing_itCases')]
+    public function test_finds_a_container_kept_by_an_uninitialized_lazy_object_without_initializing_it(\Closure $make, string $path): void
+    {
+        $lazy = $make(new Container());
+
+        self::assertSame(
+            ['path' => $path, 'class' => Container::class],
+            ContainerReferenceFinder::find(new class ($lazy) {
+                public function __construct(public object $g) {}
+            }),
+        );
+        self::assertTrue(new \ReflectionClass(LazyService::class)->isUninitializedLazyObject($lazy));
     }
 
     public function test_reports_an_uninitialized_lazy_container_without_initializing_it(): void

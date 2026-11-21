@@ -14,7 +14,8 @@ use Psr\Container\ContainerInterface;
  *
  * The path of a hit is built from these segments, and the root itself is `''`:
  * `->name` (property), `[0]` / `['key']` (array element), `{this}` (a closure's
- * bound object), `{use $name}` (a closure's `use` variable), `[#n]` / `[#n data]`
+ * bound object), `{use $name}` (a closure's `use` variable), `{initializer}` (the
+ * initializer or factory of an uninitialized lazy object), `[#n]` / `[#n data]`
  * (the n-th object of an `SplObjectStorage` or `WeakMap`, and the data attached
  * to it).
  *
@@ -57,12 +58,15 @@ final class ContainerReferenceFinder
                 }
                 $seen[$id] = true;
 
-                // Reading the properties of a lazy object would initialize it.
-                if (new \ReflectionClass($value)->isUninitializedLazyObject($value)) {
-                    continue;
-                }
-
                 $children = self::objectChildren($path, $value, $seenReferences);
+
+                // An uninitialized lazy object holds what its initializer captured. Neither
+                // reading the initializer nor `get_mangled_object_vars()` (which then lists only
+                // the properties already set) initializes it.
+                $class = new \ReflectionClass($value);
+                if ($class->isUninitializedLazyObject($value)) {
+                    $children[] = [$path . '{initializer}', $class->getLazyInitializer($value)];
+                }
             } else {
                 continue;
             }

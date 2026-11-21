@@ -11,9 +11,11 @@ use OxPHP\Runtime\Tests\Stub\Yii\ArrayConfig;
 use OxPHP\Runtime\Tests\Stub\Yii\Guard\HoldsClosure;
 use OxPHP\Runtime\Tests\Stub\Yii\Guard\HoldsContainer;
 use OxPHP\Runtime\Tests\Stub\Yii\Guard\HoldsInjector;
+use OxPHP\Runtime\Tests\Stub\Yii\Guard\LazyService;
 use OxPHP\Runtime\Tests\Stub\Yii\Guard\NeedsCurrentRoute;
 use OxPHP\Runtime\Tests\Stub\Yii\Guard\NeedsTaggedProbes;
 use OxPHP\Runtime\Tests\Stub\Yii\PerRequestProbe;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Yiisoft\Definitions\Reference;
@@ -105,6 +107,47 @@ final class SharedServicesTest extends TestCase
         $this->expectExceptionMessage(\sprintf(self::HOLDS_CONTAINER, HoldsClosure::class, Container::class, 'property path ->resolve{use $c}'));
 
         SharedServices::resolve($this->blueprint(), [HoldsClosure::class], false);
+    }
+
+    /**
+     * @return iterable<string, array{bool}>
+     */
+    public static function provideA_shared_lazy_service_whose_initializer_keeps_the_container_fails_and_stays_uninitializedCases(): iterable
+    {
+        yield 'ghost' => [true];
+        yield 'proxy' => [false];
+    }
+
+    #[DataProvider('provideA_shared_lazy_service_whose_initializer_keeps_the_container_fails_and_stays_uninitializedCases')]
+    public function test_a_shared_lazy_service_whose_initializer_keeps_the_container_fails_and_stays_uninitialized(bool $ghost): void
+    {
+        $made = null;
+        $bp = $this->blueprint([
+            LazyService::class => static function (ContainerInterface $c) use ($ghost, &$made): LazyService {
+                $class = new \ReflectionClass(LazyService::class);
+
+                return $made = $ghost
+                    ? $class->newLazyGhost(static function (LazyService $s) use ($c): void {
+                        $s->value = $c;
+                    })
+                    : $class->newLazyProxy(static function () use ($c): LazyService {
+                        $s = new LazyService();
+                        $s->value = $c;
+
+                        return $s;
+                    });
+            },
+        ]);
+
+        try {
+            SharedServices::resolve($bp, [LazyService::class], false);
+            self::fail('The lazy service was shared.');
+        } catch (\LogicException $e) {
+            self::assertSame(\sprintf(self::HOLDS_CONTAINER, LazyService::class, Container::class, 'property path {initializer}{use $c}'), $e->getMessage());
+        }
+
+        self::assertInstanceOf(LazyService::class, $made);
+        self::assertTrue(new \ReflectionClass(LazyService::class)->isUninitializedLazyObject($made));
     }
 
     public function test_sharing_the_container_itself_fails(): void
