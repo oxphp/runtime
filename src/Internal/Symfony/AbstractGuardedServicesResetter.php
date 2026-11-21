@@ -25,7 +25,11 @@ use Symfony\Contracts\Service\ResetInterface;
  * request is still counted and "only me" is `1`. Outside worker mode nothing opens a
  * scope, the count is `0`, and the inner resetter always runs, as in stock Symfony.
  *
- * An exception from the inner resetter propagates unchanged; `ResetterChain` logs it.
+ * An exception from the inner resetter propagates unchanged to the caller:
+ * `Kernel::boot()` lets it out of `handle()`, so the runner answers that request
+ * with its fallback 500; `Container::reset()` swallows it; and
+ * `SymfonyContainerResetter`, which calls this guard at the end of a request once
+ * a request on the worker bailed out, runs inside `ResetterChain`, which logs it.
  *
  * symfony/dependency-injection 8.1 moved `ServicesResetterInterface` there from
  * symfony/http-kernel (7.3 to 8.0), so each subclass implements one of the two.

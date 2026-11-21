@@ -47,7 +47,8 @@ use Symfony\Contracts\Translation\TranslatorInterface;
  * the bundles, not only on the installed DependencyInjection: FrameworkBundle 8.0
  * with DependencyInjection 8.1 still registers HttpKernel's.
  *
- * It never fails the build, so `cache:warmup` keeps working after a Symfony upgrade.
+ * It withholds instead of throwing for everything it detects, so `cache:warmup`
+ * keeps working after a Symfony upgrade.
  */
 final class FiberIsolationPass implements CompilerPassInterface
 {
@@ -79,7 +80,9 @@ final class FiberIsolationPass implements CompilerPassInterface
         // Must stay first: the checks below autoload and reflect the scoped classes,
         // and on http-kernel < 7.3 none of them may be touched. The version is read
         // from `Kernel` because DependencyInjection 8.1 installs alongside any
-        // http-kernel from 6.4. Each guard implements one of the two interfaces;
+        // http-kernel from 6.4. At least one of the two `ServicesResetterInterface`s
+        // must exist for a guard to load (on 8.1 HttpKernel's extends
+        // DependencyInjection's, so the Legacy guard implements both there);
         // DependencyInjection's is checked first here, since from 8.1 autoloading
         // HttpKernel's triggers a deprecation.
         if (!\class_exists(Kernel::class)
