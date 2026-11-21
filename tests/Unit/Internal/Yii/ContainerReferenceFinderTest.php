@@ -170,6 +170,39 @@ final class ContainerReferenceFinderTest extends TestCase
         }]));
     }
 
+    public function test_terminates_on_an_array_that_holds_a_reference_to_itself(): void
+    {
+        $items = ['x' => 1];
+        $items['self'] = &$items;
+
+        self::assertNull(ContainerReferenceFinder::find(new class ($items) {
+            public function __construct(public readonly array $items) {}
+        }));
+    }
+
+    public function test_finds_a_container_in_an_array_that_holds_a_reference_to_itself(): void
+    {
+        $items = [];
+        $items['self'] = &$items;
+        $items['container'] = new Container();
+
+        // The reference is followed once, and the container behind it is still reached.
+        self::assertSame(
+            ['path' => "->items['self']['container']", 'class' => Container::class],
+            ContainerReferenceFinder::find(new class ($items) {
+                public function __construct(public readonly array $items) {}
+            }),
+        );
+    }
+
+    public function test_terminates_on_a_root_array_that_holds_a_reference_to_itself(): void
+    {
+        $root = [];
+        $root['self'] = &$root;
+
+        self::assertNull(ContainerReferenceFinder::find($root));
+    }
+
     public function test_terminates_on_cycles(): void
     {
         $a = new \stdClass();

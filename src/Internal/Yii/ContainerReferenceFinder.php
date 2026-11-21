@@ -17,6 +17,10 @@ use Psr\Container\ContainerInterface;
  * bound object), `{use $name}` (a closure's `use` variable), `[#n]` / `[#n data]`
  * (the n-th object of an `SplObjectStorage` or `WeakMap`, and the data attached
  * to it).
+ *
+ * Not seen by the walk: `SplDoublyLinkedList`/`SplQueue`/`SplStack`,
+ * `SplHeap`/`SplPriorityQueue`, `SplFixedArray`, generators, and the native state
+ * of internal objects.
  */
 final class ContainerReferenceFinder
 {
@@ -32,12 +36,16 @@ final class ContainerReferenceFinder
         $stack = [['', $root]];
         /** @var array<int, true> $seen */
         $seen = [];
+        // Arrays have no identity, so an array that holds a reference to itself is
+        // told apart by the id of that reference.
+        /** @var array<string, true> $seenReferences */
+        $seenReferences = [];
 
         while ($stack !== []) {
             [$path, $value] = \array_pop($stack);
 
             if (\is_array($value)) {
-                $children = self::arrayChildren($path, $value);
+                $children = self::arrayChildren($path, $value, $seenReferences);
             } elseif (\is_object($value)) {
                 if ($value instanceof ContainerInterface || \is_a($value, self::INJECTOR)) {
                     return ['path' => $path, 'class' => $value::class];
@@ -54,7 +62,7 @@ final class ContainerReferenceFinder
                     continue;
                 }
 
-                $children = self::objectChildren($path, $value);
+                $children = self::objectChildren($path, $value, $seenReferences);
             } else {
                 continue;
             }
@@ -70,13 +78,23 @@ final class ContainerReferenceFinder
 
     /**
      * @param array<array-key, mixed> $array
+     * @param array<string, true>     $seenReferences ids of the references already queued
      *
      * @return list<array{string, mixed}>
      */
-    private static function arrayChildren(string $path, array $array): array
+    private static function arrayChildren(string $path, array $array, array &$seenReferences): array
     {
         $children = [];
         foreach ($array as $key => $value) {
+            $reference = \ReflectionReference::fromArrayElement($array, $key);
+            if ($reference !== null) {
+                $id = $reference->getId();
+                if (isset($seenReferences[$id])) {
+                    continue;
+                }
+                $seenReferences[$id] = true;
+            }
+
             $children[] = [$path . (\is_int($key) ? '[' . $key . ']' : "['" . $key . "']"), $value];
         }
 
@@ -84,9 +102,11 @@ final class ContainerReferenceFinder
     }
 
     /**
+     * @param array<string, true> $seenReferences
+     *
      * @return list<array{string, mixed}>
      */
-    private static function objectChildren(string $path, object $object): array
+    private static function objectChildren(string $path, object $object, array &$seenReferences): array
     {
         $children = [];
 
@@ -111,7 +131,7 @@ final class ContainerReferenceFinder
 
         if ($object instanceof \ArrayObject || $object instanceof \ArrayIterator) {
             // Their elements aren't properties.
-            $children = [...$children, ...self::arrayChildren($path, $object->getArrayCopy())];
+            $children = [...$children, ...self::arrayChildren($path, $object->getArrayCopy(), $seenReferences)];
         } elseif ($object instanceof \SplObjectStorage) {
             $n = 0;
             foreach ($object as $entry) {
