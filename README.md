@@ -15,7 +15,9 @@ auto-detected when the container is resolved.
   `symfony/runtime` defaults when not running under the OxPHP SAPI).
   Worker mode needs OxPHP **0.11.0+**: older servers ignore the response
   status in worker mode and answer every request `200` (redirects and 404s
-  included). Traditional mode works on any version.
+  included), and drop the `.env` values the boot wrote into `$_ENV`
+  part-way through a request — a Symfony app then fails every `%env()%`
+  lookup with `EnvNotFoundException`. Traditional mode works on any version.
 - `symfony/runtime` `^6.4 || ^7.0 || ^8.0`
 
 ## Installation
