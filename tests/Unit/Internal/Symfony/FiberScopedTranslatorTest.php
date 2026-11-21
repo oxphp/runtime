@@ -97,6 +97,34 @@ final class FiberScopedTranslatorTest extends TestCase
         self::assertSame(['Привет', 'ru'], $a->result());
     }
 
+    public function test_an_empty_locale_falls_back_like_stock_never_to_another_requests(): void
+    {
+        // Neither the boot locale (en) nor request B's (en): stock reads the
+        // ICU default locale, which OxPHP keeps per request.
+        \Locale::setDefault('ru');
+        $stock = self::inner();
+        $stock->setLocale('');
+
+        $translator = new FiberScopedTranslator(self::inner());
+
+        $a = RequestFiber::start(static function () use ($translator): array {
+            $translator->setLocale('');
+            \Fiber::suspend();
+
+            // The inner's own locale is now B's, and must not leak in.
+            return [$translator->getLocale(), $translator->trans('hello'), $translator->getCatalogue()->getLocale()];
+        });
+
+        RequestFiber::start(static function () use ($translator): void {
+            $translator->setLocale('en');
+        });
+
+        $a->resume();
+
+        self::assertSame('ru', $stock->getLocale());
+        self::assertSame(['ru', 'Привет', 'ru'], $a->result());
+    }
+
     public function test_fresh_request_starts_at_the_boot_locale(): void
     {
         $translator = new FiberScopedTranslator(self::inner());

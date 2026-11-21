@@ -24,7 +24,7 @@ use Symfony\Contracts\Translation\TranslatorInterface;
  *
  * A scope that never set a locale reads the boot locale, captured from the inner
  * in the constructor, never the inner's current locale (which is whichever
- * request wrote last).
+ * request wrote last). One that set `''` reads the stock fallback.
  *
  * The inner may itself be wrapped (logging, the data collector in debug).
  * `DataCollectorTranslator` probes the translator it wraps with `method_exists()`
@@ -77,12 +77,16 @@ final class FiberScopedTranslator implements TranslatorInterface, TranslatorBagI
         RequestScopes::current()->set($this->token, $locale);
     }
 
+    /**
+     * An empty locale falls back as stock `Translator::getLocale()` does, to the
+     * ICU default locale (`'en'` without intl), never to the inner's shared one.
+     */
     public function getLocale(): string
     {
         $locale = RequestScopes::current()->get($this->token, fn (): string => $this->bootLocale);
         \assert(\is_string($locale));
 
-        return $locale;
+        return $locale ?: (\class_exists(\Locale::class) ? \Locale::getDefault() : 'en');
     }
 
     public function getCatalogue(?string $locale = null): MessageCatalogueInterface
