@@ -11,10 +11,13 @@ use OxPHP\Runtime\Internal\Reset\ResetterChain;
 use OxPHP\Runtime\Internal\Runner\AbstractHttpRunner;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\RunsUnderPhpCgi;
 use PHPUnit\Framework\TestCase;
 
 final class AbstractHttpRunnerTest extends TestCase
 {
+    use RunsUnderPhpCgi;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
@@ -92,6 +95,38 @@ final class AbstractHttpRunnerTest extends TestCase
         $out = $h->capturedOutputs()[0] ?? '';
         self::assertStringContainsString('Internal Server Error', $out);
         self::assertSame(1, $resets);
+    }
+
+    public function test_the_fallback_500_drops_the_headers_the_failed_response_queued(): void
+    {
+        $r = self::runUnderPhpCgi('failAfterQueueingResponseHeaders');
+
+        self::assertSame(500, $r['status'], $r['stderr']);
+        self::assertSame(['text/plain; charset=utf-8'], self::headerValues($r['headers'], 'Content-Type'));
+        self::assertSame([], self::headerValues($r['headers'], 'Content-Disposition'));
+        self::assertNotContains('20000', self::headerValues($r['headers'], 'Content-Length'));
+        self::assertSame("Internal Server Error\n", $r['body']);
+        self::assertStringContainsString('body failed before any output', $r['stderr']);
+    }
+
+    /**
+     * Run under php-cgi by the test above: one traditional-mode request whose handler
+     * queues a download's headers, as emitting does, then throws before any output.
+     */
+    public static function failAfterQueueingResponseHeaders(): void
+    {
+        OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/report.csv'));
+
+        $runner = new class (new OxPHP(), new ResetterChain([])) extends AbstractHttpRunner {
+            protected function handleRequest(OxRequest $req): void
+            {
+                \header('Content-Length: 20000');
+                \header('Content-Disposition: attachment; filename="report.csv"');
+
+                throw new \RuntimeException('body failed before any output');
+            }
+        };
+        $runner->run();
     }
 
     public function test_run_worker_puts_boot_server_vars_back_into_every_request(): void
