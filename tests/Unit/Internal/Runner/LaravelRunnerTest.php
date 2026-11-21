@@ -23,6 +23,11 @@ final class LaravelRunnerTest extends TestCase
         OxPHPHarness::reset();
     }
 
+    protected function tearDown(): void
+    {
+        OxPHPHarness::reset();
+    }
+
     public function test_handle_and_terminate_invoked_in_order(): void
     {
         OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/users/1'));

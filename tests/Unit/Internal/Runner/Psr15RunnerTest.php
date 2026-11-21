@@ -22,6 +22,11 @@ final class Psr15RunnerTest extends TestCase
         OxPHPHarness::reset();
     }
 
+    protected function tearDown(): void
+    {
+        OxPHPHarness::reset();
+    }
+
     public function test_one_shot_builds_psr7_request_from_oxphp_request_and_emits_response(): void
     {
         $harness = OxPHPHarness::instance();

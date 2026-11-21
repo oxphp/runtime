@@ -15,6 +15,11 @@ final class OxPHPHarnessTest extends TestCase
         OxPHPHarness::reset();
     }
 
+    protected function tearDown(): void
+    {
+        OxPHPHarness::reset();
+    }
+
     public function test_worker_flag_defaults_false(): void
     {
         self::assertFalse(\oxphp_is_worker());
