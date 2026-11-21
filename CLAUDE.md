@@ -56,6 +56,8 @@ When `oxphp_server_info()` is not declared (i.e. not running under the OxPHP SAP
 
 Uploaded files are the one exception: both builders read `$_FILES`, which OxPHP builds even with `SUPERGLOBALS_ENABLED=false` and keeps per request across fiber switches. `RequestInterface::files()` is a flat list, and `UploadedFileInterface::name()` is the client's filename, so the request API can't give the form's field names (`photos[]`, `user[avatar]`). `HttpFoundationRequestBuilder` hands `$_FILES` to Symfony's `FileBag`, as `Request::createFromGlobals()` does (an empty file input becomes `null`). `Psr15Runner` walks PHP's parallel `tmp_name`/`size`/`error`/`name`/`type` trees and gives an upload that isn't `UPLOAD_ERR_OK` an empty stream. Go back to the request API only if OxPHP adds the field name to `UploadedFileInterface`.
 
+`Internal\Yii\ServerRequestBuilder` builds the Yii request from `oxphp_http_request()` too, and takes uploads from `$_FILES` as well; the comment above its `$_FILES` read says why.
+
 ### PSR-17 factory discovery
 
 `Internal\Emitter\Psr17FactoryLocator` probes installed factories in order: Nyholm → Guzzle → HttpSoft → Laminas. HttpSoft and Laminas split factories across four classes; the locator wraps both shapes into a `Psr17Factories` quad so runners see one interface. An explicit FQCN or instance via the `psr17_factory` runtime option overrides discovery.
