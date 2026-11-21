@@ -12,9 +12,15 @@ use OxPHP\Http\RequestInterface as OxRequest;
  * superglobals empty.
  *
  * It follows the `$_SERVER` OxPHP registers, less what the request API has no
- * source for: the entry script's paths (`SCRIPT_NAME`, `SCRIPT_FILENAME`,
- * `PHP_SELF`, `DOCUMENT_ROOT`, `DOCUMENT_URI`), `REMOTE_PORT` and
- * `GATEWAY_INTERFACE`.
+ * source for:
+ * - the entry script's paths: `SCRIPT_NAME`, `SCRIPT_FILENAME`, `PHP_SELF`,
+ *   `DOCUMENT_ROOT`, `DOCUMENT_URI`, and `PATH_INFO` (set for a URL that names
+ *   the entry file, such as `/index.php/news`);
+ * - `REMOTE_PORT` and `GATEWAY_INTERFACE`;
+ * - `OXPHP_TRACE_ID`, `OXPHP_SPAN_ID` and `OXPHP_PARENT_SPAN_ID`, set when tracing
+ *   is on, and `OXPHP_DENIED_PATH` and `OXPHP_DENIED_PATTERN`, set when a denied
+ *   path falls back to another script;
+ * - the process environment, which is read from `$_ENV` or `getenv()`.
  */
 final class ServerParams
 {
@@ -30,8 +36,8 @@ final class ServerParams
             'QUERY_STRING' => $qs ?? '',
             'SERVER_PROTOCOL' => $ox->httpProtocol(),
             'SERVER_SOFTWARE' => $serverSoftware,
-            'HTTP_HOST' => self::host($ox),
-            'SERVER_NAME' => $ox->host(),
+            // OxPHP's name for a request that names no host: HTTP/1.0 may leave out `Host`.
+            'SERVER_NAME' => $ox->host() !== '' ? $ox->host() : 'localhost',
             'SERVER_PORT' => (string) $ox->port(),
             'REMOTE_ADDR' => $ox->ip(),
             'REQUEST_TIME' => (int) $ox->startTime(),
@@ -61,17 +67,10 @@ final class ServerParams
                 continue;
             }
 
+            // `HTTP_HOST` among them, so only a request that has `Host` gets it, as sent.
             $server['HTTP_' . \strtoupper(\str_replace('-', '_', $name))] = $value;
         }
 
         return $server;
-    }
-
-    private static function host(OxRequest $ox): string
-    {
-        $port = $ox->port();
-        $isDefault = ($ox->scheme() === 'http' && $port === 80)
-                  || ($ox->scheme() === 'https' && $port === 443);
-        return $ox->host() . ($isDefault ? '' : ':' . $port);
     }
 }

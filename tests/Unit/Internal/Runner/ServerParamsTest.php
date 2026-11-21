@@ -21,7 +21,7 @@ final class ServerParamsTest extends TestCase
             scheme: 'https',
             host: 'example.com',
             port: 8443,
-            headers: ['accept' => 'text/html', 'x-forwarded-for' => '1.2.3.4'],
+            headers: ['host' => 'example.com:8443', 'accept' => 'text/html', 'x-forwarded-for' => '1.2.3.4'],
             ip: '10.0.0.5',
         );
 
@@ -45,6 +45,7 @@ final class ServerParamsTest extends TestCase
         yield 'GET with a cookie and header names with _ or .' => CapturedOxPHPServer::get();
         yield 'POST form' => CapturedOxPHPServer::post();
         yield 'host and port from the Host header' => CapturedOxPHPServer::hostWithPort();
+        yield 'HTTP/1.0 without a Host header' => CapturedOxPHPServer::http10WithoutHost();
     }
 
     /**

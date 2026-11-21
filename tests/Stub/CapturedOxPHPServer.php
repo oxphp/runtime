@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Stub;
 
 /**
- * Requests sent with curl to a real OxPHP server (nightly f10d3548, worker mode,
+ * Requests sent to a real OxPHP server (nightly f10d3548, worker mode unless noted,
  * SUPERGLOBALS_ENABLED=true), each with the `$_SERVER` the server registered for it,
  * less the process environment and argc/argv. Each is replayed as a
  * {@see FakeOxRequest} returning what the request object returned for it.
@@ -184,6 +184,49 @@ final class CapturedOxPHPServer
                 'SERVER_NAME' => 'example.test',
                 'SERVER_PORT' => '8443',
                 'SERVER_PROTOCOL' => 'HTTP/1.1',
+                'SERVER_SOFTWARE' => self::SOFTWARE,
+            ],
+        ];
+    }
+
+    /**
+     * `printf 'GET /server.php?a=1 HTTP/1.0\r\n\r\n' | nc 127.0.0.1 18080`, to a plain
+     * script in traditional mode: HTTP/1.0 lets a request leave out `Host` (HTTP/1.1
+     * gets a 400). The server sets no `HTTP_HOST` and names the server `localhost`;
+     * the request object has an empty host.
+     *
+     * @return array{FakeOxRequest, array<string, int|float|string>}
+     */
+    public static function http10WithoutHost(): array
+    {
+        return [
+            new FakeOxRequest(
+                path: '/server.php',
+                queryString: 'a=1',
+                host: '',
+                httpProtocolVersion: '1.0',
+                query: ['a' => '1'],
+                ip: '192.168.65.1',
+                startTime: 1795300682.4923987,
+            ),
+            [
+                'DOCUMENT_ROOT' => '/var/www/html',
+                'DOCUMENT_URI' => '/server.php',
+                'GATEWAY_INTERFACE' => 'CGI/1.1',
+                'PHP_SELF' => '/server.php',
+                'QUERY_STRING' => 'a=1',
+                'REMOTE_ADDR' => '192.168.65.1',
+                'REMOTE_PORT' => '53379',
+                'REQUEST_METHOD' => 'GET',
+                'REQUEST_SCHEME' => 'http',
+                'REQUEST_TIME' => 1795300682,
+                'REQUEST_TIME_FLOAT' => 1795300682.4923987,
+                'REQUEST_URI' => '/server.php?a=1',
+                'SCRIPT_FILENAME' => '/var/www/html/server.php',
+                'SCRIPT_NAME' => '/server.php',
+                'SERVER_NAME' => 'localhost',
+                'SERVER_PORT' => '80',
+                'SERVER_PROTOCOL' => 'HTTP/1.0',
                 'SERVER_SOFTWARE' => self::SOFTWARE,
             ],
         ];

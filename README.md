@@ -456,9 +456,12 @@ per-request service when it is a dependency.
   are read from `$_FILES`. Both work with `SUPERGLOBALS_ENABLED=false`.
 - Server params hold what OxPHP puts in `$_SERVER` for the request, except
   what its request API has no source for: `SCRIPT_NAME`, `SCRIPT_FILENAME`,
-  `PHP_SELF`, `DOCUMENT_ROOT`, `DOCUMENT_URI`, `REMOTE_PORT` and
-  `GATEWAY_INTERFACE`. So `Subfolder` middleware can't detect a prefix; for an
-  app that isn't at the web root, give it `prefix`.
+  `PHP_SELF`, `DOCUMENT_ROOT`, `DOCUMENT_URI`, `PATH_INFO` (set for a URL such
+  as `/index.php/news`), `REMOTE_PORT`, `GATEWAY_INTERFACE`, the tracing keys
+  `OXPHP_TRACE_ID`, `OXPHP_SPAN_ID` and `OXPHP_PARENT_SPAN_ID`, the deny-fallback
+  keys `OXPHP_DENIED_PATH` and `OXPHP_DENIED_PATTERN`, and the process
+  environment. So `Subfolder` middleware can't detect a prefix; for an app that
+  isn't at the web root, give it `prefix`.
 - Read the environment from `$_ENV` or `getenv()`, not `$_SERVER`: OxPHP
   rebuilds `$_SERVER` for every request.
 
