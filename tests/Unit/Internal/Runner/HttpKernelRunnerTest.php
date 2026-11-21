@@ -9,7 +9,9 @@ use OxPHP\Runtime\Internal\Runner\HttpKernelRunner;
 use OxPHP\Runtime\Tests\Stub\Apps\FakeSymfonyKernel;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\UploadedFilesFixture;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -17,14 +19,19 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 final class HttpKernelRunnerTest extends TestCase
 {
+    private UploadedFilesFixture $uploads;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
+        $this->uploads = new UploadedFilesFixture();
     }
 
     protected function tearDown(): void
     {
         OxPHPHarness::reset();
+        $_FILES = [];
+        $this->uploads->cleanUp();
     }
 
     public function test_synthesises_server_vars_and_emits_response(): void
@@ -182,5 +189,85 @@ final class HttpKernelRunnerTest extends TestCase
 
         self::assertSame(['sym:/a', 'sym:/b'], $h->capturedOutputs());
         self::assertSame(2, $resets);
+    }
+
+    public function test_uploaded_file_is_keyed_by_its_form_field_name(): void
+    {
+        $files = $this->handleUpload($this->uploads->form());
+
+        self::assertSame(['avatar', 'photos', 'user', 'deep', 'empty'], \array_keys($files));
+        self::assertSame(['me.jpg', 'image/jpeg', 0, 'hello-avatar'], self::describe($files['avatar']));
+    }
+
+    public function test_array_field_keeps_every_file_in_order(): void
+    {
+        $files = $this->handleUpload($this->uploads->form());
+
+        self::assertCount(2, $files['photos']);
+        self::assertSame(['p1.jpg', 'image/jpeg', 0, 'photo-one'], self::describe($files['photos'][0]));
+        self::assertSame(['p2.jpg', 'image/png', 0, 'photo-two'], self::describe($files['photos'][1]));
+    }
+
+    public function test_nested_fields_keep_their_structure(): void
+    {
+        $files = $this->handleUpload($this->uploads->form());
+
+        self::assertSame(['me.jpg', 'image/jpeg', 0, 'nested-avatar'], self::describe($files['user']['avatar']));
+        self::assertSame(['deep.txt', 'text/plain', 0, 'deep-file'], self::describe($files['deep']['a']['b']));
+    }
+
+    public function test_files_sharing_a_client_filename_are_both_kept(): void
+    {
+        $files = $this->handleUpload($this->uploads->form());
+
+        self::assertSame('hello-avatar', self::describe($files['avatar'])[3]);
+        self::assertSame('nested-avatar', self::describe($files['user']['avatar'])[3]);
+    }
+
+    public function test_file_input_left_empty_is_null_as_under_php_fpm(): void
+    {
+        $files = $this->handleUpload($this->uploads->form());
+
+        self::assertArrayHasKey('empty', $files);
+        self::assertNull($files['empty']);
+    }
+
+    public function test_worker_reads_the_uploads_of_each_request(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(new FakeOxRequest(method: 'POST', path: '/a'), $this->uploads->single('doc', 'a.txt', 'first'));
+        $h->pushRequest(new FakeOxRequest(method: 'POST', path: '/b'), $this->uploads->single('doc', 'b.txt', 'second'));
+
+        $kernel = FakeSymfonyKernel::echoingPath();
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [])->run();
+
+        self::assertSame(['a.txt', 'text/plain', 0, 'first'], self::describe($kernel->handled[0]->files->get('doc')));
+        self::assertSame(['b.txt', 'text/plain', 0, 'second'], self::describe($kernel->handled[1]->files->get('doc')));
+    }
+
+    /**
+     * @param array<string, mixed> $files the request's $_FILES
+     * @return array<string, mixed> the built request's files
+     */
+    private function handleUpload(array $files): array
+    {
+        $_FILES = $files;
+        OxPHPHarness::instance()->setCurrentRequest(new FakeOxRequest(method: 'POST', path: '/upload'));
+        $kernel = FakeSymfonyKernel::echoingPath();
+
+        \ob_start();
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [])->run();
+        \ob_end_clean();
+
+        return $kernel->handled[0]->files->all();
+    }
+
+    /** @return array{?string, ?string, int, string|false} client name, client type, error, contents */
+    private static function describe(mixed $file): array
+    {
+        self::assertInstanceOf(UploadedFile::class, $file);
+
+        return [$file->getClientOriginalName(), $file->getClientMimeType(), $file->getError(), \file_get_contents($file->getPathname())];
     }
 }
