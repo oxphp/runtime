@@ -6,12 +6,24 @@ namespace OxPHP\Runtime\Tests\Unit\Internal\Symfony;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTokenStorage;
+use OxPHP\Runtime\Tests\Stub\Apps\FakeSymfonyKernel;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\EventDispatcher\EventDispatcher;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\Session\Session;
+use Symfony\Component\HttpFoundation\Session\Storage\MockArraySessionStorage;
+use Symfony\Component\HttpKernel\Event\RequestEvent;
+use Symfony\Component\HttpKernel\Event\ResponseEvent;
+use Symfony\Component\HttpKernel\HttpKernelInterface;
+use Symfony\Component\HttpKernel\KernelEvents;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
 use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
 use Symfony\Component\Security\Core\Authentication\Token\UsernamePasswordToken;
 use Symfony\Component\Security\Core\User\InMemoryUser;
+use Symfony\Component\Security\Core\User\InMemoryUserProvider;
+use Symfony\Component\Security\Http\Firewall\ContextListener;
 
 final class FiberScopedTokenStorageTest extends TestCase
 {
@@ -184,6 +196,65 @@ final class FiberScopedTokenStorageTest extends TestCase
         self::assertSame($alice, $clonedToken);
         self::assertNull($cloneAfterReset);
         self::assertSame($alice, $originalAfterCloneReset);
+    }
+
+    /**
+     * Pins the real-world login path with the stock `ContextListener`, wired the way
+     * SecurityBundle wires it: the listener's own dispatcher is the per-firewall one,
+     * and its `onKernelResponse` is registered statically on the global dispatcher.
+     * Its dynamic add/remove of a response listener therefore never touches the
+     * global dispatcher, so the scoped token storage alone keeps logins intact.
+     */
+    public function test_a_login_persists_when_another_request_on_the_firewall_finishes_first(): void
+    {
+        $storage = new FiberScopedTokenStorage();
+        $firewallDispatcher = new EventDispatcher();
+        $globalDispatcher = new EventDispatcher();
+        $listener = new ContextListener(
+            $storage,
+            [new InMemoryUserProvider(['alice' => ['password' => 'secret'], 'bob' => ['password' => 'secret']])],
+            'main',
+            null,
+            $firewallDispatcher,
+        );
+        $globalDispatcher->addListener(KernelEvents::RESPONSE, $listener->onKernelResponse(...));
+
+        $kernel = FakeSymfonyKernel::echoingPath();
+        $sessionA = new Session(new MockArraySessionStorage());
+        $sessionB = new Session(new MockArraySessionStorage());
+        $requestA = Request::create('/');
+        $requestA->setSession($sessionA);
+        $requestB = Request::create('/');
+        $requestB->setSession($sessionB);
+        $alice = self::token('alice');
+
+        $a = RequestFiber::start(static function () use ($storage, $listener, $globalDispatcher, $kernel, $requestA, $alice): void {
+            $listener->authenticate(new RequestEvent($kernel, $requestA, HttpKernelInterface::MAIN_REQUEST));
+            $storage->setToken($alice);
+            \Fiber::suspend();
+
+            // Request B has finished by now; A's response must still save A's own login.
+            $globalDispatcher->dispatch(
+                new ResponseEvent($kernel, $requestA, HttpKernelInterface::MAIN_REQUEST, new Response()),
+                KernelEvents::RESPONSE,
+            );
+        });
+
+        RequestFiber::start(static function () use ($listener, $globalDispatcher, $kernel, $requestB): void {
+            $listener->authenticate(new RequestEvent($kernel, $requestB, HttpKernelInterface::MAIN_REQUEST));
+            $globalDispatcher->dispatch(
+                new ResponseEvent($kernel, $requestB, HttpKernelInterface::MAIN_REQUEST, new Response()),
+                KernelEvents::RESPONSE,
+            );
+        });
+
+        $a->resume();
+
+        self::assertTrue($sessionA->has('_security_main'));
+        $saved = \unserialize($sessionA->get('_security_main'));
+        self::assertInstanceOf(TokenInterface::class, $saved);
+        self::assertSame('alice', $saved->getUserIdentifier());
+        self::assertFalse($sessionB->has('_security_main'));
     }
 
     private static function token(string $username): UsernamePasswordToken

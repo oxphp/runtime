@@ -36,17 +36,6 @@ final class OverrideCheckTest extends TestCase
         self::assertSame([], OverrideCheck::missing(ChildFixture::class, ParentFixture::class, ['b']));
     }
 
-    public function test_constructor_parameter_names_the_parameter_at_an_index(): void
-    {
-        $withConstructor = new class (1, 2) {
-            public function __construct(public int $a, public int $b) {}
-        };
-
-        self::assertSame('b', OverrideCheck::constructorParameter($withConstructor::class, 1));
-        self::assertNull(OverrideCheck::constructorParameter($withConstructor::class, 2));
-        self::assertNull(OverrideCheck::constructorParameter(\stdClass::class, 0));
-    }
-
     public function test_shipped_subclasses_override_every_stateful_method(): void
     {
         self::assertSame([], OverrideCheck::missing(FiberScopedRequestStack::class, RequestStack::class, ['resetRequestFormats']));

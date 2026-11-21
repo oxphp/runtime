@@ -42,17 +42,4 @@ final class OverrideCheck
 
         return $missing;
     }
-
-    /**
-     * Name of the constructor parameter at the 0-based `$index`, or null when
-     * the class has no constructor or no such parameter.
-     *
-     * @param class-string $class
-     */
-    public static function constructorParameter(string $class, int $index): ?string
-    {
-        $parameters = new \ReflectionClass($class)->getConstructor()?->getParameters() ?? [];
-
-        return isset($parameters[$index]) ? $parameters[$index]->getName() : null;
-    }
 }
