@@ -173,8 +173,10 @@ final class OxPHPApplicationRunner extends ApplicationRunner
 
     private function runUnderOxPHP(): void
     {
+        // Set by withContainer(), and by getContainer() to the container it builds; both are final,
+        // so the two can't be told apart.
         if ($this->parentProperty('container') !== null) {
-            throw new \LogicException('OxPHPApplicationRunner builds a new container for every request from the config, so withContainer() cannot be used under OxPHP. Use withConfig() instead.');
+            throw new \LogicException('OxPHPApplicationRunner builds a new container for every request from the config, so under OxPHP it cannot run with a container set by withContainer() or built by an earlier getContainer() call. Use withConfig() instead, and don\'t call getContainer() before run().');
         }
 
         // Catches errors while the config and the containers are built, as in `HttpApplicationRunner`.

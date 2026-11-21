@@ -156,15 +156,33 @@ final class OxPHPApplicationRunnerTest extends TestCase
         self::assertSame([], OxPHPHarness::instance()->capturedOutputs());
     }
 
-    public function test_with_container_cannot_be_used_under_oxphp(): void
+    /**
+     * @return iterable<string, array{\Closure(OxPHPApplicationRunner): OxPHPApplicationRunner}>
+     */
+    public static function provideA_runner_holding_a_container_cannot_run_under_oxphpCases(): iterable
+    {
+        yield 'withContainer()' => [static fn (OxPHPApplicationRunner $r): OxPHPApplicationRunner => $r->withContainer(new Container())];
+        // ApplicationRunner keeps the container getContainer() builds, in the property withContainer() sets.
+        yield 'getContainer() before run()' => [static function (OxPHPApplicationRunner $r): OxPHPApplicationRunner {
+            $r->getContainer();
+
+            return $r;
+        }];
+    }
+
+    /**
+     * @param \Closure(OxPHPApplicationRunner): OxPHPApplicationRunner $prepare
+     */
+    #[DataProvider('provideA_runner_holding_a_container_cannot_run_under_oxphpCases')]
+    public function test_a_runner_holding_a_container_cannot_run_under_oxphp(\Closure $prepare): void
     {
         OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/', ['route' => 'r']));
 
-        $e = $this->thrown(fn () => $this->underOxPHP($this->runner()->withContainer(new Container())));
+        $e = $this->thrown(fn () => $this->underOxPHP($prepare($this->runner())));
 
         self::assertInstanceOf(\LogicException::class, $e);
         self::assertSame(
-            'OxPHPApplicationRunner builds a new container for every request from the config, so withContainer() cannot be used under OxPHP. Use withConfig() instead.',
+            'OxPHPApplicationRunner builds a new container for every request from the config, so under OxPHP it cannot run with a container set by withContainer() or built by an earlier getContainer() call. Use withConfig() instead, and don\'t call getContainer() before run().',
             $e->getMessage(),
         );
         self::assertSame([], OxPHPHarness::instance()->capturedOutputs());
