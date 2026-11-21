@@ -5,14 +5,18 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Unit\Internal\Symfony;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Symfony\FiberScopedLogoutUrlGenerator;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestContext;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestStack;
+use OxPHP\Runtime\Internal\Symfony\FiberScopedTokenStorage;
 use OxPHP\Runtime\Internal\Symfony\OverrideCheck;
 use OxPHP\Runtime\Tests\Stub\OverrideCheck\ChildFixture;
 use OxPHP\Runtime\Tests\Stub\OverrideCheck\ParentFixture;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\Routing\RequestContext;
+use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
+use Symfony\Component\Security\Http\Logout\LogoutUrlGenerator;
 
 final class OverrideCheckTest extends TestCase
 {
@@ -47,5 +51,7 @@ final class OverrideCheckTest extends TestCase
     {
         self::assertSame([], OverrideCheck::missing(FiberScopedRequestStack::class, RequestStack::class, ['resetRequestFormats']));
         self::assertSame([], OverrideCheck::missing(FiberScopedRequestContext::class, RequestContext::class));
+        self::assertSame([], OverrideCheck::missing(FiberScopedTokenStorage::class, TokenStorage::class));
+        self::assertSame([], OverrideCheck::missing(FiberScopedLogoutUrlGenerator::class, LogoutUrlGenerator::class, ['registerListener']));
     }
 }
