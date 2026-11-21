@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Stub;
 
 use OxPHP\Http\RequestInterface;
+use OxPHP\Runtime\Internal\Fiber\RequestScopes;
 
 final class OxPHPHarness
 {
@@ -35,6 +36,7 @@ final class OxPHPHarness
     public static function reset(): void
     {
         self::$instance = new self();
+        RequestScopes::resetForTests();
     }
 
     public function setWorker(bool $on): self
@@ -173,7 +175,13 @@ final class OxPHPHarness
                 }
                 \ob_start();
                 try {
-                    $handler();
+                    // OxPHP runs every worker iteration inside a fiber of its
+                    // own; mirror that so fiber-keyed code sees a current fiber.
+                    $fiber = new \Fiber($handler);
+                    $fiber->start();
+                    if (!$fiber->isTerminated()) {
+                        throw new \LogicException('handler suspended outside a RequestFiber scenario');
+                    }
                 } finally {
                     $this->outputs[] = (string) \ob_get_clean();
                     $this->statuses[] = (int) \http_response_code();

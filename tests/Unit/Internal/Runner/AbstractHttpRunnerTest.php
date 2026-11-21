@@ -6,6 +6,7 @@ namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
 
 use OxPHP\Http\RequestInterface as OxRequest;
 use OxPHP\Runtime\Internal\Bridge\OxPHP;
+use OxPHP\Runtime\Internal\Fiber\RequestScopes;
 use OxPHP\Runtime\Internal\Reset\ResetterChain;
 use OxPHP\Runtime\Internal\Runner\AbstractHttpRunner;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
@@ -129,6 +130,81 @@ final class AbstractHttpRunnerTest extends TestCase
         $runner->run();
 
         self::assertSame(['/real', 'prod', 'hello'], $state);
+    }
+
+    public function test_worker_iteration_runs_inside_an_open_request_scope(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state): void {
+                $state[] = RequestScopes::inFlight();
+            },
+            state: $state,
+        );
+
+        $runner->run();
+
+        self::assertSame([1, 1], $state);
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::isDegraded());
+    }
+
+    public function test_resetters_run_while_the_request_scope_is_still_open(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+
+        $seen = [];
+        $runner = $this->newRunner(
+            handler: static function (): void {},
+            state: $state,
+            resetters: [static function () use (&$seen): void {
+                $seen[] = RequestScopes::inFlight();
+            }],
+        );
+
+        $runner->run();
+
+        self::assertSame([1], $seen);
+    }
+
+    public function test_worker_iteration_closes_its_scope_when_the_handler_throws(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/boom'));
+        $h->pushRequest(FakeOxRequest::get('/ok'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state): void {
+                if ($req->path() === '/boom') {
+                    throw new \RuntimeException('kaboom');
+                }
+
+                $state[] = RequestScopes::inFlight();
+            },
+            state: $state,
+        );
+
+        // The runner logs the handler's exception; keep it out of the test output.
+        $logFile = (string) \tempnam(\sys_get_temp_dir(), 'oxphp-runtime-test');
+        $previousLog = (string) \ini_get('error_log');
+        \ini_set('error_log', $logFile);
+
+        try {
+            $runner->run();
+        } finally {
+            \ini_set('error_log', $previousLog);
+            \unlink($logFile);
+        }
+
+        self::assertSame([1], $state);
+        self::assertSame(0, RequestScopes::inFlight());
     }
 
     /**
