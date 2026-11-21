@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Unit\Internal\Symfony;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Symfony\FiberScopedLocaleSwitcher;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedLogoutUrlGenerator;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestContext;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestStack;
@@ -19,6 +20,7 @@ use Symfony\Component\Routing\RequestContext;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\UsageTrackingTokenStorage;
 use Symfony\Component\Security\Http\Logout\LogoutUrlGenerator;
+use Symfony\Component\Translation\LocaleSwitcher;
 
 final class OverrideCheckTest extends TestCase
 {
@@ -53,6 +55,7 @@ final class OverrideCheckTest extends TestCase
         self::assertSame([], OverrideCheck::missing(FiberScopedRequestContext::class, RequestContext::class));
         self::assertSame([], OverrideCheck::missing(FiberScopedTokenStorage::class, TokenStorage::class));
         self::assertSame([], OverrideCheck::missing(FiberScopedLogoutUrlGenerator::class, LogoutUrlGenerator::class, ['registerListener']));
+        self::assertSame([], OverrideCheck::missing(FiberScopedLocaleSwitcher::class, LocaleSwitcher::class));
         // `UsageTrackingTokenStorage` is final, so its scoped counterpart is a decorator, not a subclass.
         self::assertSame([], OverrideCheck::missing(FiberScopedUsageTrackingTokenStorage::class, UsageTrackingTokenStorage::class));
     }
