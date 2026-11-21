@@ -40,11 +40,12 @@ use Symfony\Contracts\Translation\TranslatorInterface;
  * SecurityBundle and the translator are all optional.
  *
  * The `services_resetter` guard follows the interface the decorated class implements:
- * `GuardedServicesResetter` for symfony/dependency-injection's (8.1 moved
- * `ServicesResetterInterface` there), `LegacyGuardedServicesResetter` for
- * symfony/http-kernel's (7.3 to 8.0). Which one Symfony registers depends on the
- * bundles, not only on the installed DependencyInjection: FrameworkBundle 8.0 with
- * DependencyInjection 8.1 still registers HttpKernel's.
+ * `LegacyGuardedServicesResetter` for a class that implements symfony/http-kernel's
+ * (7.3 on), even when it implements symfony/dependency-injection's too, and
+ * `GuardedServicesResetter` for one that implements only DependencyInjection's (8.1
+ * moved `ServicesResetterInterface` there). Which one Symfony registers depends on
+ * the bundles, not only on the installed DependencyInjection: FrameworkBundle 8.0
+ * with DependencyInjection 8.1 still registers HttpKernel's.
  *
  * It never fails the build, so `cache:warmup` keeps working after a Symfony upgrade.
  */
@@ -79,7 +80,7 @@ final class FiberIsolationPass implements CompilerPassInterface
         // and on http-kernel < 7.3 none of them may be touched. The version is read
         // from `Kernel` because DependencyInjection 8.1 installs alongside any
         // http-kernel from 6.4. Each guard implements one of the two interfaces;
-        // DependencyInjection's is checked first, since from 8.1 autoloading
+        // DependencyInjection's is checked first here, since from 8.1 autoloading
         // HttpKernel's triggers a deprecation.
         if (!\class_exists(Kernel::class)
             || Kernel::VERSION_ID < 70300
@@ -228,11 +229,18 @@ final class FiberIsolationPass implements CompilerPassInterface
     /**
      * Picks the guard by the interface the `services_resetter` class implements, which
      * is the type the guard must keep for whatever is wired with that service.
-     * `is_a()` doesn't autoload the interface, so on http-kernel 8.1 HttpKernel's
-     * deprecated one stays unloaded: DependencyInjection's `ServicesResetter` doesn't
-     * implement it. An alias is followed to its definition, which `DecoratorServicePass`
-     * decorates. A missing service, or an alias that resolves to none, leaves
-     * `$resetter` `null`: there is nothing to decorate.
+     * HttpKernel's is checked first: on 8.1 it extends DependencyInjection's, so a
+     * class that implements it (HttpKernel's own `ServicesResetter`, which
+     * FrameworkBundle 8.0 registers) implements both and needs the legacy guard, which
+     * there implements both too. `is_a()` doesn't autoload the interface, so on the
+     * full 8.1 stack HttpKernel's deprecated one stays unloaded: DependencyInjection's
+     * `ServicesResetter` doesn't implement it.
+     *
+     * An alias is followed to its definition for the class. `DecoratorServicePass`
+     * then re-points the `services_resetter` alias at the guard and aliases `.inner`
+     * to the old target; the target definition itself is not decorated, so a reference
+     * to the target's own id bypasses the guard. A missing service, or an alias that
+     * resolves to none, leaves `$resetter` `null`: there is nothing to decorate.
      *
      * @param-out class-string<AbstractGuardedServicesResetter>|null $resetter
      *
@@ -261,14 +269,14 @@ final class FiberIsolationPass implements CompilerPassInterface
             return [\sprintf('service "%s" uses %s, which does not exist', $id, $class)];
         }
 
-        if (\is_a($class, ServicesResetterInterface::class, true)) {
-            $resetter = GuardedServicesResetter::class;
+        if (\is_a($class, LegacyServicesResetterInterface::class, true)) {
+            $resetter = LegacyGuardedServicesResetter::class;
 
             return [];
         }
 
-        if (\is_a($class, LegacyServicesResetterInterface::class, true)) {
-            $resetter = LegacyGuardedServicesResetter::class;
+        if (\is_a($class, ServicesResetterInterface::class, true)) {
+            $resetter = GuardedServicesResetter::class;
 
             return [];
         }

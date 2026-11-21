@@ -17,11 +17,14 @@ use OxPHP\Runtime\Internal\Symfony\GuardedServicesResetter;
 use OxPHP\Runtime\Internal\Symfony\LegacyGuardedServicesResetter;
 use OxPHP\Runtime\Tests\Stub\InstalledServicesResetter;
 use OxPHP\Runtime\Tests\Stub\LocaleAwareConsumer;
+use OxPHP\Runtime\Tests\Stub\ServicesResetter\BothInterfacesResetter;
 use OxPHP\Runtime\Tests\Stub\ServicesResetter\DependencyInjectionResetter;
 use OxPHP\Runtime\Tests\Stub\ServicesResetter\HttpKernelResetter;
 use OxPHP\Runtime\Tests\Stub\ServicesResetter\PlainResetter;
 use OxPHP\Runtime\Tests\Stub\TranslatorConsumer;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\IgnoreDeprecations;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\DependencyInjection\Argument\IteratorArgument;
 use Symfony\Component\DependencyInjection\Argument\ServiceLocatorArgument;
@@ -33,6 +36,8 @@ use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\HttpFoundation\RequestStack;
+use Symfony\Component\HttpKernel\DependencyInjection\ServicesResetterInterface as HttpKernelServicesResetterInterface;
+use Symfony\Component\HttpKernel\Kernel;
 use Symfony\Component\Routing\RequestContext;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\UsageTrackingTokenStorage;
@@ -336,6 +341,33 @@ final class FiberIsolationPassTest extends TestCase
         $c->compile();
 
         self::assertInstanceOf(LegacyGuardedServicesResetter::class, $c->get('services_resetter'));
+    }
+
+    /**
+     * HttpKernel's own `ServicesResetter` on 8.1 implements both interfaces, and
+     * FrameworkBundle 8.0 aliases HttpKernel's to it: the guard must keep that type.
+     * A separate process, because on http-kernel 8.1 the stub loads HttpKernel's
+     * deprecated interface, which must stay unloaded for the rest of the suite.
+     */
+    #[RunInSeparateProcess]
+    #[IgnoreDeprecations]
+    public function test_a_services_resetter_with_both_interfaces_gets_the_legacy_guard(): void
+    {
+        if (!InstalledServicesResetter::inDependencyInjection() || Kernel::VERSION_ID < 70300) {
+            self::markTestSkipped('Needs symfony/dependency-injection 8.1 and symfony/http-kernel 7.3 or later: both ServicesResetterInterfaces.');
+        }
+
+        $c = self::stockContainer();
+        $c->getDefinition('services_resetter')->setClass(BothInterfacesResetter::class)->setArguments([]);
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertTrue($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame(LegacyGuardedServicesResetter::class, $c->getDefinition('oxphp_runtime.services_resetter')->getClass());
+
+        $c->compile();
+
+        self::assertInstanceOf(HttpKernelServicesResetterInterface::class, $c->get('services_resetter'));
     }
 
     public function test_a_services_resetter_with_the_dependency_injection_interface_gets_the_guard(): void

@@ -30,7 +30,7 @@ use Symfony\Contracts\Service\ResetInterface;
  * symfony/dependency-injection 8.1 moved `ServicesResetterInterface` there from
  * symfony/http-kernel (7.3 to 8.0), so each subclass implements one of the two.
  * `FiberIsolationPass` installs the one whose interface the decorated
- * `services_resetter` class implements.
+ * `services_resetter` class implements, HttpKernel's when it implements both.
  */
 abstract class AbstractGuardedServicesResetter implements ResetInterface
 {
