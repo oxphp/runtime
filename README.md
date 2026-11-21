@@ -273,8 +273,8 @@ APP_RUNTIME_OPTIONS="{\"psr17_factory\":\"My\\\\Factory\"}"
 
 ## Streaming
 
-`StreamedResponse`, `StreamedJsonResponse`, and PSR-7 bodies with
-readable streams are streamed chunk-by-chunk — ideal for SSE and large
+`StreamedResponse`, `StreamedJsonResponse`, and PSR-7 bodies larger than
+3 MiB or of unknown size are streamed chunk-by-chunk — ideal for SSE and large
 payloads.
 
 Streamed callbacks are driven **live**: every `echo` inside a
@@ -282,8 +282,11 @@ Streamed callbacks are driven **live**: every `echo` inside a
 chunks are never collected and replayed after the callback returns. The
 runtime enables PHP's implicit flush while driving the callback, so the
 engine pushes each chunk through the OxPHP SAPI's flush hook on write;
-the callback does not need to call `flush()` itself. PSR-7 stream bodies
-are flushed per chunk via `oxphp_stream_flush()`. An exception thrown
+the callback does not need to call `flush()` itself. A PSR-7 body of known
+size up to 3 MiB, the most OxPHP compresses, is read whole before the headers
+go out and sent without a flush, so the server can compress it; a larger body,
+or one of unknown size, is flushed per 8 KiB chunk via `oxphp_stream_flush()`,
+and OxPHP never compresses a streamed body. An exception thrown
 mid-stream closes the runtime's output buffers cleanly (bytes already
 streamed stay sent, partial buffers are discarded) and never poisons the
 worker.
@@ -363,9 +366,11 @@ $runner->run();
 - It doesn't go through `symfony/runtime`: no `APP_RUNTIME`, no
   `autoload_runtime.php`.
 - Pass a custom config with `withConfig()`. `withContainer()` throws under
-  OxPHP, since every request's container is built from the config.
+  OxPHP, since every request's container is built from the config. So does
+  calling `getContainer()` before `run()`: it keeps the container it builds
+  where `withContainer()` puts one.
 - A given `emitter` sends the responses under OxPHP too; without one, the
-  runtime's own emitter streams the body chunk by chunk.
+  runtime's own emitter sends the body as described in [Streaming](#streaming).
 
 ### Per-request isolation
 
@@ -386,9 +391,12 @@ on a real server. Overlapping requests need OxPHP 0.16.0 or later (see
 - `ApplicationStartup` and `ApplicationShutdown` fire once per worker, from a
   boot container. Requests never see that container's non-shared services,
   so what those listeners do to them doesn't reach any request.
+- The bootstrap callbacks never run against the boot container, so those
+  listeners don't see what the callbacks set up. `HttpApplicationRunner` runs
+  bootstrap first, then `ApplicationStartup`, against its one container.
 - Bootstrap callbacks (the `bootstrap-web` group) run per request, against
   that request's container, unlike Yii's FrankenPHP runner, which runs them
-  once per worker.
+  once per worker. An entry that isn't callable fails the worker at boot.
 - `AfterEmit` fires once per request, after the response is sent.
 
 ### Rules for shared services
@@ -443,6 +451,11 @@ per-request service when it is a dependency.
 
 - Request data comes from OxPHP, not the superglobals, except uploads, which
   are read from `$_FILES`. Both work with `SUPERGLOBALS_ENABLED=false`.
+- Server params hold what OxPHP puts in `$_SERVER` for the request, except
+  what its request API has no source for: `SCRIPT_NAME`, `SCRIPT_FILENAME`,
+  `PHP_SELF`, `DOCUMENT_ROOT`, `DOCUMENT_URI`, `REMOTE_PORT` and
+  `GATEWAY_INTERFACE`. So `Subfolder` middleware can't detect a prefix; for an
+  app that isn't at the web root, give it `prefix`.
 - Read the environment from `$_ENV` or `getenv()`, not `$_SERVER`: OxPHP
   rebuilds `$_SERVER` for every request.
 
