@@ -30,8 +30,8 @@ use Yiisoft\Yii\Runner\BootstrapRunner;
  * container is dropped when the request ends, never reused, and never reset.
  *
  * Per request it does what `HttpApplicationRunner::runInternal()` does: bootstrap,
- * `Application::handle()`, `ErrorCatcher` with a `ThrowableHandler` when that
- * throws, the emit preparation, then `afterEmit()`. A throw from building the
+ * `Application::handle()` and the emit preparation, `ErrorCatcher` with a
+ * `ThrowableHandler` when either throws, then `afterEmit()`. A throw from building the
  * container, bootstrap, `ErrorCatcher` or emitting goes up to `AbstractHttpRunner`,
  * which logs it and sends its fallback 500; a throw from `afterEmit()` is only
  * logged, since the response is already out.
@@ -82,13 +82,16 @@ final class YiiRunner extends AbstractHttpRunner
             try {
                 try {
                     $response = $app->handle($request);
+                    // Preparing reads the body, which renders a Yii view: a throw there still gets ErrorCatcher's response.
+                    $prepared = ResponsePreparer::prepare($request, $response, $streams);
                 } catch (\Throwable $e) {
                     /** @var ResponseInterface $response */
                     $response = $container->get(ErrorCatcher::class)->process($request, new ThrowableHandler($e));
+                    $prepared = ResponsePreparer::prepare($request, $response, $streams);
                 }
 
                 // Once emitting starts, headers may be out: a throw goes up as is, with no second ErrorCatcher pass.
-                $this->emit(ResponsePreparer::prepare($request, $response, $streams));
+                $this->emit($prepared);
             } finally {
                 try {
                     $app->afterEmit($response ?? null);

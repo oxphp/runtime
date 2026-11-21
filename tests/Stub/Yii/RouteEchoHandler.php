@@ -12,8 +12,9 @@ use Yiisoft\Router\CurrentRoute;
 
 /**
  * The application's fallback handler. With `size` it returns that many bytes, with
- * `status` that status; otherwise a JSON report of what this request saw: its route,
- * which probe instances it got, its start time and whether bootstrap ran.
+ * `status` that status, with `render_throw` a body that throws that message when it
+ * is built; otherwise a JSON report of what this request saw: its route, which probe
+ * instances it got, its start time and whether bootstrap ran.
  */
 final class RouteEchoHandler implements RequestHandlerInterface
 {
@@ -34,6 +35,15 @@ final class RouteEchoHandler implements RequestHandlerInterface
 
         if (isset($q['status'])) {
             return $this->respond((int) $q['status'], 'status-body');
+        }
+
+        if (isset($q['render_throw'])) {
+            $message = (string) $q['render_throw'];
+
+            return new DeferredBodyResponse(
+                $this->responses->createResponse(),
+                static fn (): never => throw new \RuntimeException($message),
+            );
         }
 
         return $this->respond(200, \json_encode([

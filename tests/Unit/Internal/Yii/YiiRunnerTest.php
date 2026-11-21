@@ -83,6 +83,20 @@ final class YiiRunnerTest extends TestCase
         self::assertSame('caught: boom', $h->capturedOutputs()[0]);
     }
 
+    public function test_a_body_that_fails_to_build_before_anything_is_sent_gets_the_error_catcher_response(): void
+    {
+        // A Yii view renders when its body is first read, after handle() has returned;
+        // HttpApplicationRunner still answers such a failure with ErrorCatcher's response.
+        $h = OxPHPHarness::instance()->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/', ['route' => 'view', 'render_throw' => 'view boom']))->pushRequest(FakeOxRequest::get('/', ['route' => 'ok']));
+
+        $this->runner()->run();
+
+        self::assertSame([500, 200], $h->capturedStatuses());
+        self::assertSame('caught: view boom', $h->capturedOutputs()[0]);
+        self::assertSame(2, \array_count_values(EventLog::$events)['AfterEmit']);
+    }
+
     public function test_when_the_error_catcher_throws_too_the_fallback_500_is_sent_and_the_next_request_is_served(): void
     {
         $h = OxPHPHarness::instance()->setWorker(true);
