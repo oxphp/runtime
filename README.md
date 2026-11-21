@@ -1,8 +1,8 @@
 # oxphp/runtime
 
-OxPHP runtime adapter — run **Symfony**, **Laravel** and **PSR-15** applications
-on the [OxPHP](https://github.com/oxphp/oxphp) server in both traditional and
-worker mode.
+OxPHP runtime adapter — run **Symfony**, **Laravel**, **Yii 3** and **PSR-15**
+applications on the [OxPHP](https://github.com/oxphp/oxphp) server in both
+traditional and worker mode.
 
 Extends [`symfony/runtime`](https://github.com/symfony/runtime). Zero hard
 dependencies on any framework or PSR-7 implementation — everything is
@@ -18,6 +18,9 @@ auto-detected when the container is resolved.
   included), and drop the `.env` values the boot wrote into `$_ENV`
   part-way through a request — a Symfony app then fails every `%env()%`
   lookup with `EnvNotFoundException`. Traditional mode works on any version.
+  Requests that overlap on one worker need OxPHP **0.16.0+**: on 0.15.0, a
+  request that starts while others are in flight inherits their headers-sent
+  state, so its own headers fail.
 - `symfony/runtime` `^6.4 || ^7.0 || ^8.0`
 
 ## Installation
@@ -322,6 +325,16 @@ $response = new JsonResponse(['status' => 'accepted']);
 
 ### Setup
 
+Install the runtime. It depends on `symfony/runtime`, whose Composer plugin the
+Yii runner doesn't use. `yiisoft/app` lists the plugins it allows, so Composer
+asks about this one, and fails when it can't ask (`--no-interaction`, CI,
+Docker builds). Turn the plugin off first:
+
+```bash
+composer config allow-plugins.symfony/runtime false
+composer require oxphp/runtime
+```
+
 In `yiisoft/app`'s `public/index.php`, replace `HttpApplicationRunner` with
 `OxPHPApplicationRunner`, and list the services the workers may share:
 
@@ -345,7 +358,8 @@ $runner->run();
   deprecated ones (`logger`, `bufferSize` and the three `use*Middleware`
   flags), plus `sharedServices`.
 - Outside OxPHP (PHP-FPM, `php -S`, CLI), `run()` is `HttpApplicationRunner`
-  built from the same arguments, so keep `yiisoft/yii-runner-http` installed.
+  built from the same arguments. Keep `yiisoft/yii-runner-http` installed: it
+  is that fallback, and it brings the packages the runner uses under OxPHP.
 - It doesn't go through `symfony/runtime`: no `APP_RUNTIME`, no
   `autoload_runtime.php`.
 - Pass a custom config with `withConfig()`. `withContainer()` throws under
@@ -358,12 +372,14 @@ $runner->run();
 OxPHP runs overlapping requests on one worker, so a container shared between
 them lets one request's `CurrentRoute`, session, translator locale or view
 state leak into another (or makes the second request fail). Every request
-therefore gets a new container, with its own instance of every service not
-listed in `sharedServices`, your own singletons included. The container is
-dropped when the request ends; it is never reused and never reset. On
-`yiisoft/app`'s home page that costs about 0.4 ms per request. Overlapping
-requests need OxPHP 0.16.0 or later: 0.15.0 leaks the headers-sent state into
-requests that start while others are in flight.
+therefore gets a new container, which builds its own instance of every service
+not listed in `sharedServices`. An object that already exists when the config
+is read is the exception: every request shares it (see
+[What the guard can't see](#what-the-guard-cant-see)). The container is dropped
+when the request ends; it is never reused and never reset. On `yiisoft/app`'s
+home page that costs roughly 0.6–0.7 ms per request, in a one-worker benchmark
+on a real server. Overlapping requests need OxPHP 0.16.0 or later (see
+[Requirements](#requirements)).
 
 ### Lifecycle
 
@@ -379,18 +395,24 @@ requests that start while others are in flight.
 
 The listed services are built once, at worker boot. A listed id that has a
 `reset` definition, or that depends on a service that has one (such as
-`CurrentRoute`), fails the boot with a message naming both.
+`CurrentRoute`), fails the boot. The message names the listed id, and the
+per-request service when it is a dependency.
 
 - Listed services live for the worker's life and are never reset.
 - They see every request that overlaps, so any PHP state inside them is
   shared between those requests.
 - List every id your code asks for. An id that isn't listed, such as the
   concrete class behind a listed interface, gets a fresh instance per
-  request. An alias defined as `Reference::to()` a listed id gets the shared
-  instance.
+  request. An alias of a listed id gets the shared instance, whether it is a
+  class name (`ConnectionInterface::class => Connection::class`) or
+  `Reference::to()`.
+- Key a shared service's provider extensions on the listed id itself, not on
+  an alias. An extension keyed on an alias runs again in every request,
+  against the shared instance.
 - A service that keeps a container or an `Injector` can't be shared. That
   includes the event dispatcher, `Application` and middleware dispatchers.
-  Boot fails and names the property that holds it.
+  Listing one fails the boot, either because it holds a container or because
+  it depends on a per-request service; the message says which.
 
 ### What the guard can't see
 
@@ -401,6 +423,21 @@ The listed services are built once, at worker boot. A listed id that has a
   service that depends on a per-request service from a delegate passes boot.
 - Tags. Listing a `tag@…` id doesn't share its services; each request still
   builds them. List the member services instead.
+- Objects created when the config is read: `new Foo()` as a definition, as a
+  constructor argument, or captured with `use` by a definition closure. Each
+  exists once per worker and is shared by every request, listed or not. Define
+  per-request services as class names, arrays, or closures that create the
+  object inside the closure.
+- Static and global state, including anything a bootstrap callback stores in
+  a static. Overlapping requests share it. `yiisoft/widget`'s bootstrap
+  callback, for one, keeps a factory over the request's container in
+  `WidgetFactory`, so a widget built through it resolves its dependencies
+  from the container of the request that bootstrapped most recently, which
+  may be another request's. That affects the packages built on it, such as
+  `yiisoft/form`, `yiisoft/yii-widgets`, `yiisoft/yii-dataview` and
+  `yiisoft/yii-bootstrap5`. Pass per-request dependencies to `::widget()` as
+  constructor arguments:
+  `MyWidget::widget(['currentRoute' => $currentRoute])`.
 
 ### Requests and environment
 
