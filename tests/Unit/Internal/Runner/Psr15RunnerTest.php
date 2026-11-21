@@ -9,6 +9,7 @@ use OxPHP\Runtime\Internal\Bridge\OxPHP;
 use OxPHP\Runtime\Internal\Emitter\Psr17FactoryLocator;
 use OxPHP\Runtime\Internal\Runner\Psr15Runner;
 use OxPHP\Runtime\Tests\Stub\Apps\FakePsr15Handler;
+use OxPHP\Runtime\Tests\Stub\CapturedOxPHPServer;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
@@ -239,5 +240,26 @@ final class Psr15RunnerTest extends TestCase
         self::assertSame([20000, 20000], \array_map(\strlen(...), $h->capturedOutputs()));
         // Flushes before each request and after the last: none for the known size, one per chunk for the unknown.
         self::assertSame([0, 0, 3], $flushes);
+    }
+
+    public function test_the_request_carries_the_server_params_oxphp_registers_except_what_the_request_api_has_no_source_for(): void
+    {
+        [$ox, $real] = CapturedOxPHPServer::post();
+        OxPHPHarness::instance()->setCurrentRequest($ox);
+        $handler = FakePsr15Handler::echoingPath();
+
+        \ob_start();
+
+        try {
+            new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        } finally {
+            \ob_end_clean();
+        }
+
+        $expected = ['SERVER_SOFTWARE' => 'OxPHP/0.0.0-test'] + \array_diff_key($real, \array_flip(CapturedOxPHPServer::NOT_FROM_THE_API));
+        \ksort($expected);
+        $server = $handler->received[0]->getServerParams();
+        \ksort($server);
+        self::assertSame($expected, $server);
     }
 }

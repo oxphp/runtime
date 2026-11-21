@@ -24,6 +24,7 @@ final class Psr15Runner extends AbstractHttpRunner
 {
     private readonly ResponseEmitter $emitter;
     private ?Psr17Factories $factories = null;
+    private ?string $serverSoftware = null;
 
     public function __construct(
         private readonly RequestHandlerInterface $handler,
@@ -52,7 +53,8 @@ final class Psr15Runner extends AbstractHttpRunner
 
     private function buildPsr7Request(OxRequest $ox, Psr17Factories $f): ServerRequestInterface
     {
-        $req = Psr7Support::baseRequest($ox, $f->serverRequest, $f->stream)
+        $server = ServerParams::build($ox, $this->serverSoftware ??= $this->bridge->serverSoftware());
+        $req = Psr7Support::baseRequest($ox, $f->serverRequest, $f->stream, $server)
             ->withUploadedFiles($this->convertFiles($_FILES ?? [], $f));
 
         $parsed = $ox->payload();
