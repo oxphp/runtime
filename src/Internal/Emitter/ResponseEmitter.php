@@ -99,12 +99,15 @@ final class ResponseEmitter
             return;
         }
 
-        \http_response_code($status);
         foreach ($headers as $name => $values) {
             foreach ((array) $values as $v) {
                 \header($name . ': ' . $v, false);
             }
         }
+
+        // After the headers, as SapiEmitter does: PHP turns the status into 302 when a
+        // Location header is sent while the status is neither 201 nor 3xx.
+        \http_response_code($status);
     }
 
     /**

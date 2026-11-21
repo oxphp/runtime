@@ -7,10 +7,13 @@ namespace OxPHP\Runtime\Tests\Unit\Internal\Emitter;
 use OxPHP\Runtime\Internal\Bridge\OxPHP;
 use OxPHP\Runtime\Internal\Emitter\ResponseEmitter;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\RunsUnderPhpCgi;
 use PHPUnit\Framework\TestCase;
 
 final class ResponseEmitterTest extends TestCase
 {
+    use RunsUnderPhpCgi;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
@@ -130,5 +133,50 @@ final class ResponseEmitterTest extends TestCase
         \ob_end_clean();
 
         self::assertTrue(true);
+    }
+
+    public function test_a_location_header_keeps_the_response_status(): void
+    {
+        // PHP turns the status into 302 when a Location header is sent while the status
+        // is neither 201 nor 3xx; setting the status after the headers keeps the response's.
+        $r = self::runUnderPhpCgi('emitAcceptedWithLocation');
+
+        self::assertSame(202, $r['status'], $r['stderr']);
+        self::assertSame(['/jobs/1'], self::headerValues($r['headers'], 'Location'));
+        self::assertSame("queued\n", $r['body']);
+        self::assertSame('', $r['stderr']);
+    }
+
+    public function test_a_location_header_keeps_the_status_of_a_streamed_callback(): void
+    {
+        $r = self::runUnderPhpCgi('emitCallbackAcceptedWithLocation');
+
+        self::assertSame(202, $r['status'], $r['stderr']);
+        self::assertSame(['/jobs/1'], self::headerValues($r['headers'], 'Location'));
+        self::assertSame("queued\n", $r['body']);
+        self::assertSame('', $r['stderr']);
+    }
+
+    /**
+     * Run under php-cgi by the test above: a 202 with a Location header, as an API
+     * answers a job it accepted.
+     */
+    public static function emitAcceptedWithLocation(): void
+    {
+        new ResponseEmitter(new OxPHP())->emit(202, ['Location' => ['/jobs/1'], 'Content-Type' => ['text/plain']], "queued\n");
+    }
+
+    /**
+     * Run under php-cgi by the test above: the same 202, sent through a streaming callback.
+     */
+    public static function emitCallbackAcceptedWithLocation(): void
+    {
+        new ResponseEmitter(new OxPHP())->emitCallback(
+            202,
+            ['Location' => ['/jobs/1'], 'Content-Type' => ['text/plain']],
+            static function (): void {
+                echo "queued\n";
+            },
+        );
     }
 }
