@@ -15,9 +15,11 @@ use Symfony\Component\HttpKernel\TerminableInterface;
 /**
  * @internal Runs a Symfony HttpKernel against every incoming OxPHP request.
  *
- * When the kernel is a full Symfony\Component\HttpKernel\Kernel, the
- * container's services_resetter (kernel.reset tag) runs between requests
- * automatically, prepended to the user resetter chain.
+ * When the kernel is a full Symfony\Component\HttpKernel\Kernel,
+ * SymfonyContainerResetter is prepended to the user resetter chain. Without
+ * OxPHPBundle's isolation it tears the container down after every request; with
+ * it, `kernel.reset` services are reset by the bundle's guarded
+ * `services_resetter` once the worker is idle (see SymfonyContainerResetter).
  */
 final class HttpKernelRunner extends AbstractHttpRunner
 {

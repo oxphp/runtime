@@ -16,7 +16,11 @@
         "phpunit/phpunit": "^11.0",
         "psr/http-server-handler": "^1.0",
         "symfony/dependency-injection": "^6.4 || ^7.0 || ^8.0",
-        "symfony/http-kernel": "^6.4 || ^7.0 || ^8.0"
+        "symfony/framework-bundle": "^6.4 || ^7.0 || ^8.0",
+        "symfony/http-kernel": "^6.4 || ^7.0 || ^8.0",
+        "symfony/routing": "^6.4 || ^7.0 || ^8.0",
+        "symfony/security-bundle": "^6.4 || ^7.0 || ^8.0",
+        "symfony/translation": "^6.4 || ^7.0 || ^8.0"
     },
     "suggest": {
         "symfony/http-kernel":  "To run Symfony HttpKernel applications",

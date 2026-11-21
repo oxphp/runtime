@@ -1,0 +1,386 @@
+<?php
+
+declare(strict_types=1);
+
+namespace OxPHP\Runtime\Tests\Integration\Symfony;
+
+use OxPHP\Runtime\Internal\Bridge\OxPHP;
+use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Runner\HttpKernelRunner;
+use OxPHP\Runtime\Tests\Integration\Symfony\App\ResetCounter;
+use OxPHP\Runtime\Tests\Integration\Symfony\App\TestKernel;
+use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
+use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\RequestFiber;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpKernel\Kernel;
+use Symfony\Contracts\Service\ResetInterface;
+
+/**
+ * Overlapping requests on a real FrameworkBundle + SecurityBundle kernel with `OxPHPBundle`.
+ *
+ * Each simulated worker request is a `RequestFiber` that runs `handle()`, then a
+ * streamed response's callback (`sendContent()`, where `HttpKernelRunner` uses its
+ * emitter), then `terminate()`, in the runner's order. Routes pause with `\Fiber::suspend()` when asked (`?suspend=1`), so a test can
+ * let other requests run and finish while one is still in flight (issue #5).
+ */
+final class FiberIsolationKernelTest extends TestCase
+{
+    /** Tests that hold on every supported http-kernel, isolation installed or not. */
+    private const array ON_EVERY_HTTP_KERNEL = [
+        'test_isolation_is_withheld_before_http_kernel_7_3',
+        'test_outside_worker_mode_everything_behaves_stock',
+    ];
+
+    private string $varDir = '';
+
+    private ?TestKernel $kernel = null;
+
+    private string $intlLocale = '';
+
+    /** @var array<mixed> */
+    private array $server = [];
+
+    /** @var array<mixed> */
+    private array $env = [];
+
+    private false|string $shellVerbosity = false;
+
+    protected function setUp(): void
+    {
+        OxPHPHarness::reset();
+
+        // Put back in tearDown(): the locale switcher sets the process-wide ICU
+        // default locale, a debug kernel's boot sets SHELL_VERBOSITY, and
+        // FrameworkBundle's boot sets DOCTRINE_DEPRECATIONS.
+        $this->intlLocale = \Locale::getDefault();
+        $this->server = $_SERVER;
+        $this->env = $_ENV;
+        $this->shellVerbosity = \getenv('SHELL_VERBOSITY');
+
+        $this->varDir = \sys_get_temp_dir() . '/oxphp-runtime-kernel-' . \bin2hex(\random_bytes(8));
+        new Filesystem()->mkdir($this->varDir . '/log');
+
+        // Last: tearDown() runs after a skip too and puts back what is saved above.
+        if (Kernel::VERSION_ID < 70300 && !\in_array($this->name(), self::ON_EVERY_HTTP_KERNEL, true)) {
+            self::markTestSkipped('Needs symfony/http-kernel 7.3 or later: OxPHPBundle withholds isolation before it.');
+        }
+    }
+
+    protected function tearDown(): void
+    {
+        // First, while the kernel still runs: releasing a request the harness
+        // parked after a bailout unwinds it through the kernel.
+        OxPHPHarness::reset();
+
+        if ($this->kernel !== null) {
+            $container = $this->kernel->getContainer();
+            $this->kernel->shutdown();
+            if ($container instanceof ResetInterface) {
+                $container->reset();
+            }
+            $this->kernel = null;
+        }
+
+        new Filesystem()->remove($this->varDir);
+
+        \Locale::setDefault($this->intlLocale);
+        $_SERVER = $this->server;
+        $_ENV = $this->env;
+        \putenv($this->shellVerbosity === false ? 'SHELL_VERBOSITY' : 'SHELL_VERBOSITY=' . $this->shellVerbosity);
+
+        RequestScopes::resetForTests();
+    }
+
+    /**
+     * @return iterable<string, array{bool}>
+     */
+    public static function provideReal_bundles_get_isolation_installedCases(): iterable
+    {
+        yield 'debug' => [true];
+
+        yield 'no debug' => [false];
+    }
+
+    #[DataProvider('provideReal_bundles_get_isolation_installedCases')]
+    public function test_real_bundles_get_isolation_installed(bool $debug): void
+    {
+        $container = $this->bootKernel($debug)->getContainer();
+
+        self::assertTrue($container->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame('', $container->getParameter('oxphp_runtime.fiber_isolation_reason'));
+    }
+
+    public function test_isolation_is_withheld_before_http_kernel_7_3(): void
+    {
+        if (Kernel::VERSION_ID >= 70300) {
+            self::markTestSkipped('Needs symfony/http-kernel before 7.3.');
+        }
+
+        $container = $this->bootKernel()->getContainer();
+
+        self::assertFalse($container->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame('symfony/http-kernel 7.3 or later is required', $container->getParameter('oxphp_runtime.fiber_isolation_reason'));
+    }
+
+    public function test_main_request_is_each_requests_own_while_a_stream_is_open(): void
+    {
+        $this->bootKernel();
+
+        $streams = [];
+        for ($i = 0; $i < 4; ++$i) {
+            $streams[] = $this->startRequest(Request::create('/stream?suspend=1'));
+        }
+
+        foreach ($streams as $stream) {
+            self::assertFalse($stream->isTerminated(), 'Every stream stays open in its callback.');
+        }
+
+        $answers = [];
+        for ($i = 0; $i < 40; ++$i) {
+            $answers[] = self::content($this->startRequest(Request::create('/main')));
+        }
+
+        self::assertSame(\array_fill(0, 40, 'own'), $answers);
+
+        foreach ($streams as $stream) {
+            self::assertTrue($stream->resume()->isTerminated());
+        }
+    }
+
+    public function test_locale_is_per_request(): void
+    {
+        $this->bootKernel();
+
+        $a = $this->startRequest(Request::create('/en/hello?suspend=1'));
+        $b = $this->startRequest(Request::create('/ru/hello?suspend=1'));
+
+        // A resumes first, while B is still in flight: without the bundle A renders
+        // in B's locale. In the other order stock Symfony passes too, because B
+        // finishes first and its `kernel.finish_request` listeners restore the
+        // locale of the request under it on the shared stack, which is A.
+        $a->resume();
+
+        self::assertSame('Hello|en|en', self::content($a));
+
+        $b->resume();
+
+        self::assertSame('Привет|ru|ru', self::content($b));
+    }
+
+    public function test_locale_survives_another_request_finishing(): void
+    {
+        $this->bootKernel();
+
+        $a = $this->startRequest(Request::create('/en/hello?suspend=1'));
+        $b = $this->startRequest(Request::create('/ru/hello'));
+
+        self::assertSame('Привет|ru|ru', self::content($b));
+
+        $a->resume();
+
+        self::assertSame('Hello|en|en', self::content($a));
+    }
+
+    public function test_login_persists_when_another_request_finishes_first(): void
+    {
+        $this->bootKernel();
+
+        $login = Request::create('/login?suspend=1');
+        $a = $this->startRequest($login);
+        $b = $this->startRequest(Request::create('/main'));
+
+        self::assertTrue($b->isTerminated(), 'B ran to its end while A was in flight.');
+
+        $a->resume();
+
+        self::assertSame('logged in', self::content($a));
+        self::assertTrue($login->getSession()->has('_security_main'), "A's token was saved to A's session.");
+    }
+
+    public function test_logout_path_survives_another_request_finishing(): void
+    {
+        $this->bootKernel();
+
+        $a = $this->startRequest(Request::create('/logout-path?suspend=1'));
+        $b = $this->startRequest(Request::create('/main'));
+
+        self::assertTrue($b->isTerminated(), 'B ran to its end while A was in flight.');
+
+        $a->resume();
+
+        self::assertSame('/logout', self::content($a));
+    }
+
+    public function test_kernel_reset_waits_for_an_idle_worker(): void
+    {
+        // `ServicesResetter` skips services that were never instantiated.
+        $counter = $this->bootKernel()->getContainer()->get(ResetCounter::class);
+        self::assertInstanceOf(ResetCounter::class, $counter);
+
+        $a = $this->startRequest(Request::create('/stream?suspend=1'));
+        $b = $this->startRequest(Request::create('/main'));
+
+        self::assertTrue($b->isTerminated(), 'B ran to its end while the stream was open.');
+        self::assertSame(0, $counter->resets, 'No reset while the stream is open.');
+
+        self::assertTrue($a->resume()->isTerminated());
+
+        $c = $this->startRequest(Request::create('/main'));
+
+        self::assertTrue($c->isTerminated());
+        self::assertSame(1, $counter->resets, 'The next request on an idle worker resets.');
+    }
+
+    public function test_kernel_reset_goes_on_after_a_request_bails_out_inside_the_kernel(): void
+    {
+        // A request that hits a fatal error, a time limit, exit() or a cancel
+        // inside Kernel::handle() skips every finally there: Symfony's request
+        // depth stays raised and Kernel::boot() never resets services again.
+        $kernel = $this->bootKernel();
+        $counter = $kernel->getContainer()->get(ResetCounter::class);
+        self::assertInstanceOf(ResetCounter::class, $counter);
+
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true)->setBailoutMode(true);
+        $harness->pushRequest(FakeOxRequest::get('/en/hello', ['suspend' => '1']));
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+
+        $resetsSeen = [];
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [
+            // Runs after the built-in resetter, in each request's own chain.
+            static function () use ($counter, &$resetsSeen): void {
+                $resetsSeen[] = $counter->resets;
+            },
+        ])->run();
+
+        self::assertSame(1, $harness->bailouts(), 'The first request bailed out inside the controller.');
+        self::assertSame(['own', 'own'], \array_slice($harness->capturedOutputs(), 1));
+        self::assertSame([1, 2], $resetsSeen, 'Every idle request after the bailout resets kernel.reset services.');
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertTrue(RequestScopes::hasBailedOut());
+    }
+
+    public function test_kernel_reset_runs_once_per_request_after_a_bailout_outside_the_kernel(): void
+    {
+        // A client gone mid-stream ends the request while its body streams, after
+        // Kernel::handle() returned: Symfony's request depth is back to zero and
+        // Kernel::boot() goes on resetting services, so the runtime must not too.
+        $kernel = $this->bootKernel();
+        $counter = $kernel->getContainer()->get(ResetCounter::class);
+        self::assertInstanceOf(ResetCounter::class, $counter);
+
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true)->setBailoutMode(true);
+        $harness->pushRequest(FakeOxRequest::get('/stream', ['suspend' => '1']));
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+
+        $resetsSeen = [];
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [
+            static function () use ($counter, &$resetsSeen): void {
+                $resetsSeen[] = $counter->resets;
+            },
+        ])->run();
+
+        self::assertSame(1, $harness->bailouts(), 'The first request bailed out in its streamed body.');
+        self::assertTrue(RequestScopes::hasBailedOut());
+        self::assertSame([1, 2], $resetsSeen, 'One reset per request, at its start.');
+    }
+
+    public function test_overlapping_requests_through_the_runner_keep_the_container(): void
+    {
+        // With isolation installed, a request that ends while another is in
+        // flight must not tear the container down under it (issue #5).
+        $kernel = $this->bootKernel();
+        $counter = $kernel->getContainer()->get(ResetCounter::class);
+        self::assertInstanceOf(ResetCounter::class, $counter);
+
+        $runner = new HttpKernelRunner($kernel, new OxPHP(), userResetters: []);
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true);
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+
+        $stream = $this->startRequest(Request::create('/stream?suspend=1'));
+
+        $runner->run();
+
+        self::assertFalse($stream->isTerminated(), 'The stream stayed open while the runner served /main.');
+        self::assertSame(['own'], $harness->capturedOutputs());
+        self::assertSame($counter, $kernel->getContainer()->get(ResetCounter::class), 'The container was not torn down.');
+        self::assertSame(0, $counter->resets, 'No reset while the stream is open.');
+
+        self::assertTrue($stream->resume()->isTerminated());
+        self::assertInstanceOf(StreamedResponse::class, $stream->result());
+    }
+
+    public function test_a_user_fiber_inside_a_worker_request_sees_no_request(): void
+    {
+        $this->bootKernel();
+
+        self::assertSame('null', self::content($this->startRequest(Request::create('/user-fiber'))));
+    }
+
+    public function test_outside_worker_mode_everything_behaves_stock(): void
+    {
+        $this->bootKernel();
+
+        self::assertSame('Hello|en|en', $this->handle(Request::create('/en/hello'))->getContent());
+        self::assertSame('Привет|ru|ru', $this->handle(Request::create('/ru/hello'))->getContent());
+        self::assertSame('own', $this->handle(Request::create('/main'))->getContent());
+        self::assertSame('request', $this->handle(Request::create('/user-fiber'))->getContent());
+        self::assertSame('/logout', $this->handle(Request::create('/logout-path'))->getContent());
+    }
+
+    private function bootKernel(bool $debug = true): TestKernel
+    {
+        $kernel = new TestKernel($this->varDir, $debug);
+        $kernel->boot();
+
+        // Only a booted kernel has a container for tearDown() to shut down.
+        return $this->kernel = $kernel;
+    }
+
+    /**
+     * One request as the worker runs it: `handle()`, the streamed body, `terminate()`.
+     */
+    private function handle(Request $request): Response
+    {
+        $kernel = $this->kernel;
+        \assert($kernel !== null);
+
+        $response = $kernel->handle($request);
+
+        if ($response instanceof StreamedResponse) {
+            $response->sendContent();
+        }
+
+        $kernel->terminate($request, $response);
+
+        return $response;
+    }
+
+    /**
+     * Starts the request in its own request fiber; it runs until it ends or suspends.
+     */
+    private function startRequest(Request $request): RequestFiber
+    {
+        return RequestFiber::start(fn (): Response => $this->handle($request));
+    }
+
+    private static function content(RequestFiber $request): string
+    {
+        self::assertTrue($request->isTerminated(), 'The request ran to its end.');
+
+        $response = $request->result();
+        self::assertInstanceOf(Response::class, $response);
+
+        return (string) $response->getContent();
+    }
+}

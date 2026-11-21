@@ -6,6 +6,7 @@ namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
 
 use OxPHP\Http\RequestInterface as OxRequest;
 use OxPHP\Runtime\Internal\Bridge\OxPHP;
+use OxPHP\Runtime\Internal\Fiber\RequestScopes;
 use OxPHP\Runtime\Internal\Reset\ResetterChain;
 use OxPHP\Runtime\Internal\Runner\AbstractHttpRunner;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
@@ -15,6 +16,11 @@ use PHPUnit\Framework\TestCase;
 final class AbstractHttpRunnerTest extends TestCase
 {
     protected function setUp(): void
+    {
+        OxPHPHarness::reset();
+    }
+
+    protected function tearDown(): void
     {
         OxPHPHarness::reset();
     }
@@ -129,6 +135,201 @@ final class AbstractHttpRunnerTest extends TestCase
         $runner->run();
 
         self::assertSame(['/real', 'prod', 'hello'], $state);
+    }
+
+    public function test_worker_iteration_runs_inside_an_open_request_scope(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state): void {
+                $state[] = RequestScopes::inFlight();
+            },
+            state: $state,
+        );
+
+        $runner->run();
+
+        self::assertSame([1, 1], $state);
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::isDegraded());
+    }
+
+    public function test_resetters_run_while_the_request_scope_is_still_open(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+
+        $seen = [];
+        $runner = $this->newRunner(
+            handler: static function (): void {},
+            state: $state,
+            resetters: [static function () use (&$seen): void {
+                $seen[] = RequestScopes::inFlight();
+            }],
+        );
+
+        $runner->run();
+
+        self::assertSame([1], $seen);
+    }
+
+    public function test_worker_iteration_closes_its_scope_when_the_handler_throws(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/boom'));
+        $h->pushRequest(FakeOxRequest::get('/ok'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state): void {
+                if ($req->path() === '/boom') {
+                    throw new \RuntimeException('kaboom');
+                }
+
+                $state[] = RequestScopes::inFlight();
+            },
+            state: $state,
+        );
+
+        // The runner logs the handler's exception; keep it out of the test output.
+        $logFile = (string) \tempnam(\sys_get_temp_dir(), 'oxphp-runtime-test');
+        $previousLog = (string) \ini_get('error_log');
+        \ini_set('error_log', $logFile);
+
+        try {
+            $runner->run();
+        } finally {
+            \ini_set('error_log', $previousLog);
+            \unlink($logFile);
+        }
+
+        self::assertSame([1], $state);
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::hasBailedOut(), 'An exception unwinds through the finally.');
+    }
+
+    public function test_a_request_that_bails_out_still_closes_its_scope(): void
+    {
+        // OxPHP skips every finally of a request that hits a fatal error, a time
+        // limit, exit(), a cancel, or a client gone mid-stream, and still runs the
+        // request's shutdown functions.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true)->setBailoutMode(true);
+        $h->pushRequest(FakeOxRequest::get('/bail'));
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state): void {
+                if ($req->path() === '/bail') {
+                    \Fiber::suspend();
+                }
+
+                $state[] = RequestScopes::inFlight();
+            },
+            state: $state,
+        );
+
+        $runner->run();
+
+        self::assertSame(1, $h->bailouts());
+        self::assertSame([1, 1], $state, 'The requests after the bailout run alone.');
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertTrue(RequestScopes::hasBailedOut());
+    }
+
+    public function test_the_scope_closes_before_the_apps_own_shutdown_functions(): void
+    {
+        // The runner's close is the request's first shutdown function, so an app
+        // callback that calls exit() or throws can't skip it.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true)->setBailoutMode(true);
+        $h->pushRequest(FakeOxRequest::get('/bail'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state) use ($h): void {
+                $h->registerShutdown(static function () use (&$state): void {
+                    $state[] = RequestScopes::inFlight();
+                });
+
+                \Fiber::suspend();
+            },
+            state: $state,
+        );
+
+        $runner->run();
+
+        self::assertSame([0], $state);
+    }
+
+    public function test_the_shutdown_close_is_registered_before_the_request_counts(): void
+    {
+        // A request ended between the two (a time limit, a cancel) must neither
+        // stay counted nor be closed without having been counted.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+
+        $atRegistration = [];
+        OxPHP::replaceShutdownRegistrarForTests(static function (\Closure $callback) use ($h, &$atRegistration): void {
+            $atRegistration[] = RequestScopes::inFlight();
+            $h->registerShutdown($callback);
+        });
+
+        try {
+            $this->newRunner(handler: static function (): void {}, state: $state)->run();
+        } finally {
+            OxPHP::replaceShutdownRegistrarForTests(static function (\Closure $callback): void {
+                OxPHPHarness::instance()->registerShutdown($callback);
+            });
+        }
+
+        self::assertSame([0], $atRegistration);
+        self::assertSame(0, RequestScopes::inFlight());
+    }
+
+    public function test_the_apps_shutdown_functions_still_see_their_requests_scope(): void
+    {
+        // OxPHP runs them on the request's fiber once the iteration is over; stock
+        // Symfony's see the request's token and locale, and so must these.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $owner = new \stdClass();
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state) use ($h, $owner): void {
+                RequestScopes::current()->set($owner, $req->path());
+                $h->registerShutdown(static function () use (&$state, $owner): void {
+                    $state[] = RequestScopes::current()->get($owner, static fn (): string => 'lost');
+                });
+            },
+            state: $state,
+        );
+
+        $runner->run();
+
+        self::assertSame(['/a', '/b'], $state);
+    }
+
+    public function test_requests_that_end_normally_never_mark_a_bailout(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true)->setBailoutMode(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $this->newRunner(handler: static function (): void {}, state: $state)->run();
+
+        self::assertSame(0, $h->bailouts());
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::hasBailedOut());
     }
 
     /**

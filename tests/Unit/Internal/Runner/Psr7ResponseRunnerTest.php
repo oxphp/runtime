@@ -20,6 +20,11 @@ final class Psr7ResponseRunnerTest extends TestCase
         OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/'));
     }
 
+    protected function tearDown(): void
+    {
+        OxPHPHarness::reset();
+    }
+
     public function test_emits_psr7_response_body_and_headers(): void
     {
         $factory = new Psr17Factory();

@@ -16,6 +16,11 @@ final class OxPHPTest extends TestCase
         OxPHPHarness::reset();
     }
 
+    protected function tearDown(): void
+    {
+        OxPHPHarness::reset();
+    }
+
     public function test_is_worker_reflects_harness(): void
     {
         $bridge = new OxPHP();
@@ -80,5 +85,47 @@ final class OxPHPTest extends TestCase
             $seen++;
         });
         self::assertSame(1, $seen);
+    }
+
+    public function test_request_shutdown_callbacks_run_at_the_end_of_their_request(): void
+    {
+        OxPHPHarness::instance()->setWorker(true)
+            ->pushRequest(FakeOxRequest::get('/a'))
+            ->pushRequest(FakeOxRequest::get('/b'));
+
+        $bridge = new OxPHP();
+        $log = [];
+        $bridge->serve(static function () use ($bridge, &$log): void {
+            $path = \oxphp_http_request()->path();
+            $bridge->registerRequestShutdown(static function () use ($path, &$log): void {
+                $log[] = 'shutdown:' . $path;
+            });
+            $log[] = 'handler:' . $path;
+        });
+
+        self::assertSame(['handler:/a', 'shutdown:/a', 'handler:/b', 'shutdown:/b'], $log);
+    }
+
+    public function test_request_shutdown_callbacks_run_when_the_request_bails_out(): void
+    {
+        OxPHPHarness::instance()->setWorker(true)->setBailoutMode(true)
+            ->pushRequest(FakeOxRequest::get('/bail'));
+
+        $bridge = new OxPHP();
+        $log = [];
+        $bridge->serve(static function () use ($bridge, &$log): void {
+            $bridge->registerRequestShutdown(static function () use (&$log): void {
+                $log[] = 'shutdown';
+            });
+
+            try {
+                \Fiber::suspend();
+            } finally {
+                $log[] = 'finally';
+            }
+        });
+
+        self::assertSame(['shutdown'], $log);
+        self::assertSame(1, OxPHPHarness::instance()->bailouts());
     }
 }

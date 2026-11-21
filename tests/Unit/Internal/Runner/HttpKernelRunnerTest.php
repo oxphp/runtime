@@ -22,6 +22,11 @@ final class HttpKernelRunnerTest extends TestCase
         OxPHPHarness::reset();
     }
 
+    protected function tearDown(): void
+    {
+        OxPHPHarness::reset();
+    }
+
     public function test_synthesises_server_vars_and_emits_response(): void
     {
         OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/hello'));

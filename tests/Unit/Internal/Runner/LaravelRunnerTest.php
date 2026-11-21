@@ -9,12 +9,21 @@ use OxPHP\Runtime\Internal\Runner\LaravelRunner;
 use OxPHP\Runtime\Tests\Stub\Apps\FakeLaravelKernel;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use PHPUnit\Framework\Attributes\RequiresMethod;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
+// illuminate/* are dev dependencies; runs against other Symfony versions may drop them.
+#[RequiresMethod(\Illuminate\Contracts\Http\Kernel::class, 'handle')]
+#[RequiresMethod(\Illuminate\Http\Request::class, 'createFromBase')]
 final class LaravelRunnerTest extends TestCase
 {
     protected function setUp(): void
+    {
+        OxPHPHarness::reset();
+    }
+
+    protected function tearDown(): void
     {
         OxPHPHarness::reset();
     }

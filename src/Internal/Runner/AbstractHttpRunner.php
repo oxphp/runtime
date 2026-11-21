@@ -6,6 +6,8 @@ namespace OxPHP\Runtime\Internal\Runner;
 
 use OxPHP\Http\RequestInterface as OxRequest;
 use OxPHP\Runtime\Internal\Bridge\OxPHP;
+use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Fiber\Ticket;
 use OxPHP\Runtime\Internal\Reset\ResetterChain;
 use Symfony\Component\Runtime\RunnerInterface;
 
@@ -61,8 +63,26 @@ abstract class AbstractHttpRunner implements RunnerInterface
         // request via the SAPI soft reset; we catch Throwable so a broken handler
         // cannot poison the worker. The bridge picks Worker::serve() or the
         // oxphp_worker() fallback.
+        //
+        // OxPHP runs each iteration in a fiber of its own. The request scope is
+        // opened first and closed last, after the resetters, so they still see
+        // their own request as in flight; `finally` closes it when the handler
+        // returns or throws. A request that ends in a fatal error, a time limit,
+        // exit(), a cancel or a client gone mid-stream skips every `finally`, but
+        // OxPHP still runs its shutdown functions: the same ticket is closed from
+        // one, registered first so the app's own can't skip it, and writing no
+        // output. It is registered before the ticket is entered, so a request
+        // ended in between is never counted, and one ended after is always
+        // closed. Closing twice is a no-op; closing there marks the bailout.
         $this->bridge->serve(function (): void {
+            $ticket = new Ticket();
+
             try {
+                $this->bridge->registerRequestShutdown(
+                    static fn () => RequestScopes::leaveRequest($ticket, atShutdown: true),
+                );
+                RequestScopes::enterRequest($ticket);
+
                 // The soft reset gave this request a $_SERVER of its own, which
                 // the boot never wrote into. Put the boot's entries back, never
                 // overriding what the server set for the request.
@@ -71,7 +91,11 @@ abstract class AbstractHttpRunner implements RunnerInterface
             } catch (\Throwable $e) {
                 $this->emitFallback500($e);
             } finally {
-                $this->resetters->reset();
+                try {
+                    $this->resetters->reset();
+                } finally {
+                    RequestScopes::leaveRequest($ticket);
+                }
             }
         });
 

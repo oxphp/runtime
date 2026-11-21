@@ -20,6 +20,11 @@ final class HttpFoundationResponseRunnerTest extends TestCase
         OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/'));
     }
 
+    protected function tearDown(): void
+    {
+        OxPHPHarness::reset();
+    }
+
     public function test_plain_response_emits_content(): void
     {
         $resp = new Response('plain body', 202, ['X-K' => 'v']);
