@@ -19,6 +19,7 @@ use OxPHP\Runtime\Yii\OxPHPApplicationRunner;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Psr\Log\NullLogger;
+use Yiisoft\Config\ConfigInterface;
 use Yiisoft\Di\Container;
 use Yiisoft\ErrorHandler\ErrorHandler;
 use Yiisoft\ErrorHandler\Renderer\PlainTextRenderer;
@@ -117,6 +118,70 @@ final class OxPHPApplicationRunnerTest extends TestCase
         self::assertSame([], OxPHPHarness::instance()->capturedOutputs());
     }
 
+    public function test_a_failing_bootstrap_config_read_propagates_before_start_with_the_app_error_handler_still_enabled(): void
+    {
+        OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/', ['route' => 'r']));
+        $appHandler = new ErrorHandler(new NullLogger(), new PlainTextRenderer());
+        // `yiisoft/config` builds a group when it is first read, so a broken bootstrap file throws here.
+        $config = new class (YiiFixture::config(di: [ErrorHandler::class => static fn (): ErrorHandler => $appHandler])) implements ConfigInterface {
+            public function __construct(private readonly ConfigInterface $config) {}
+
+            public function get(string $group): array
+            {
+                return $group === 'bootstrap-web' ? throw new \RuntimeException('bootstrap config boom') : $this->config->get($group);
+            }
+
+            public function has(string $group): bool
+            {
+                return $this->config->has($group);
+            }
+        };
+
+        try {
+            $e = $this->thrown(fn () => $this->underOxPHP($this->runner(config: $config)));
+
+            self::assertSame('bootstrap config boom', $e->getMessage());
+            self::assertNotContains('ApplicationStartup', EventLog::$events);
+            // Still enabled, so its exception handler renders the throwable at the top level.
+            self::assertTrue(self::enabled($appHandler));
+            self::assertSame([], OxPHPHarness::instance()->capturedOutputs());
+        } finally {
+            $appHandler->unregister();
+        }
+    }
+
+    public function test_a_throwing_startup_listener_propagates_and_shutdown_still_runs(): void
+    {
+        OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/', ['route' => 'r']));
+        EventLog::$throwOn = 'ApplicationStartup';
+        $appHandler = new ErrorHandler(new NullLogger(), new PlainTextRenderer());
+
+        try {
+            $e = $this->thrown(fn () => $this->underOxPHP($this->runner(
+                config: YiiFixture::config(di: [ErrorHandler::class => static fn (): ErrorHandler => $appHandler]),
+            )));
+
+            self::assertSame('listener boom', $e->getMessage());
+            self::assertSame(['ApplicationStartup', 'ApplicationShutdown'], EventLog::$events);
+            // A throw from inside the loop's try must reach the top level with the handler enabled, too.
+            self::assertTrue(self::enabled($appHandler));
+            self::assertSame([], OxPHPHarness::instance()->capturedOutputs());
+        } finally {
+            $appHandler->unregister();
+        }
+    }
+
+    public function test_the_app_error_handler_is_unregistered_after_the_loop_returns(): void
+    {
+        OxPHPHarness::instance()->setWorker(true)->pushRequest(FakeOxRequest::get('/', ['route' => 'r']));
+        $appHandler = new ErrorHandler(new NullLogger(), new PlainTextRenderer());
+
+        $this->underOxPHP($this->runner(config: YiiFixture::config(di: [ErrorHandler::class => static fn (): ErrorHandler => $appHandler])));
+
+        self::assertCount(1, OxPHPHarness::instance()->capturedOutputs());
+        self::assertFalse(self::enabled($appHandler));
+    }
+
     public function test_outside_oxphp_it_runs_http_application_runner_with_the_same_arguments(): void
     {
         // PHP_SAPI is 'cli' here, so run() takes the fallback. Non-default group names and the emitter prove they are forwarded.
@@ -202,7 +267,7 @@ final class OxPHPApplicationRunnerTest extends TestCase
         return \json_decode((string) $emitter->responses[0]->getBody(), true, flags: \JSON_THROW_ON_ERROR);
     }
 
-    private function runner(?ArrayConfig $config = null, mixed ...$args): OxPHPApplicationRunner
+    private function runner(?ConfigInterface $config = null, mixed ...$args): OxPHPApplicationRunner
     {
         // Named arguments may follow an unpack, not precede one.
         return new OxPHPApplicationRunner(...$args, rootPath: __DIR__)->withConfig($config ?? YiiFixture::config());
@@ -223,6 +288,15 @@ final class OxPHPApplicationRunnerTest extends TestCase
             $temp->unregister();
             $stack->restore();
         }
+    }
+
+    /**
+     * Whether $handler is enabled. `unregister()` disables it but leaves its closures
+     * on PHP's handler stacks, and `ErrorHandler` has no getter for it.
+     */
+    private static function enabled(ErrorHandler $handler): bool
+    {
+        return new \ReflectionProperty(ErrorHandler::class, 'enabled')->getValue($handler);
     }
 
     private function thrown(\Closure $run): \Throwable

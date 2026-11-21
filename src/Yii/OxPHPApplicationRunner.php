@@ -204,21 +204,23 @@ final class OxPHPApplicationRunner extends ApplicationRunner
             $boot->get(ListenerConfigurationChecker::class)->check($events);
         }
 
+        // Read at boot: `yiisoft/config` builds a group on its first read, so a broken file fails before start().
+        $bootstrapList = $this->getConfiguration($this->bootstrapGroup) ?? [];
+
         /** @var Application $application */
         $application = $boot->get(Application::class);
-        $application->start();
 
+        // As in `HttpApplicationRunner::runInternal()`: shutdown() runs even when start() throws.
         try {
-            new YiiRunner(
-                new OxPHP(),
-                $blueprint,
-                $this->getConfiguration($this->bootstrapGroup) ?? [],
-                $this->emitter,
-            )->run();
+            $application->start();
+            new YiiRunner(new OxPHP(), $blueprint, $bootstrapList, $this->emitter)->run();
         } finally {
             $application->shutdown();
-            $errorHandler->unregister();
         }
+
+        // Only after a normal return. `unregister()` leaves the handler's closures on PHP's
+        // stacks, disabled, so a throwable on its way out would then be swallowed silently.
+        $errorHandler->unregister();
     }
 
     private function registerErrorHandler(ErrorHandler $registered, ?ErrorHandler $unregistered = null): void
