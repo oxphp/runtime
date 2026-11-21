@@ -12,6 +12,7 @@ use OxPHP\Runtime\Internal\Yii\YiiRunner;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
+use OxPHP\Runtime\Tests\Stub\RunsUnderPhpCgi;
 use OxPHP\Runtime\Tests\Stub\Yii\EventLog;
 use OxPHP\Runtime\Tests\Stub\Yii\RecordingEmitter;
 use OxPHP\Runtime\Tests\Stub\Yii\SharedProbe;
@@ -23,6 +24,8 @@ use Yiisoft\Yii\Http\Application;
 
 final class YiiRunnerTest extends TestCase
 {
+    use RunsUnderPhpCgi;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
@@ -50,7 +53,7 @@ final class YiiRunnerTest extends TestCase
     {
         // What a container shared between requests does: both are served by one
         // `Application`, so both route through one `CurrentRoute`.
-        $app = $this->blueprint()->createRequestContainer()->get(Application::class);
+        $app = self::blueprint()->createRequestContainer()->get(Application::class);
         $f = new Psr17Factory();
         $request = static fn (array $query): ServerRequestInterface => $f->createServerRequest('GET', '/')->withQueryParams($query);
 
@@ -189,18 +192,43 @@ final class YiiRunnerTest extends TestCase
         self::assertSame(0, $h->flushCount());
     }
 
-    /**
-     * @param list<callable> $bootstrap
-     */
-    private function runner(array $bootstrap = [], ?EmitterInterface $emitter = null): YiiRunner
+    public function test_headers_php_queued_itself_are_dropped_so_only_the_response_headers_go_out(): void
     {
-        return new YiiRunner(new OxPHP(), $this->blueprint($bootstrap), $bootstrap, $emitter);
+        $r = self::runUnderPhpCgi('emitAfterTheSessionCacheLimiter');
+
+        self::assertSame(200, $r['status'], $r['stderr']);
+        self::assertSame(['public, max-age=60'], self::headerValues($r['headers'], 'Cache-Control'));
+        self::assertSame([], self::headerValues($r['headers'], 'Expires'));
+        self::assertSame([], self::headerValues($r['headers'], 'Pragma'));
+        self::assertSame('ok', \json_decode($r['body'], true, flags: \JSON_THROW_ON_ERROR)['route']);
+    }
+
+    /**
+     * Run under php-cgi by the test above: one traditional-mode request, after PHP's session
+     * cache limiter has queued its headers, as it does when a page starts the session.
+     */
+    public static function emitAfterTheSessionCacheLimiter(): void
+    {
+        \header('Expires: Thu, 19 Nov 1981 08:52:00 GMT');
+        \header('Cache-Control: no-store, no-cache, must-revalidate');
+        \header('Pragma: no-cache');
+        OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/', ['route' => 'ok', 'cache_control' => 'public, max-age=60']));
+
+        new YiiRunner(new OxPHP(), self::blueprint(), [])->run();
     }
 
     /**
      * @param list<callable> $bootstrap
      */
-    private function blueprint(array $bootstrap = []): ContainerBlueprint
+    private function runner(array $bootstrap = [], ?EmitterInterface $emitter = null): YiiRunner
+    {
+        return new YiiRunner(new OxPHP(), self::blueprint($bootstrap), $bootstrap, $emitter);
+    }
+
+    /**
+     * @param list<callable> $bootstrap
+     */
+    private static function blueprint(array $bootstrap = []): ContainerBlueprint
     {
         $bp = ContainerBlueprint::fromConfig(
             YiiFixture::config(bootstrap: $bootstrap),

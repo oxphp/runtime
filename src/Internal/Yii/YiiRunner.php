@@ -115,6 +115,13 @@ final class YiiRunner extends AbstractHttpRunner
             return;
         }
 
+        // PHP queues headers of its own, such as the session cache limiter's Expires, Pragma
+        // and Cache-Control; the emitter adds to them, so they would be merged into the
+        // response. Yii's SapiEmitter drops them first, and so does this.
+        if (!\headers_sent()) {
+            \header_remove();
+        }
+
         $this->responseEmitter->emit(
             $response->getStatusCode(),
             $response->getHeaders(),

@@ -14,7 +14,8 @@ use Yiisoft\Router\CurrentRoute;
  * The application's fallback handler. With `size` it returns that many bytes, with
  * `status` that status, with `render_throw` a body that throws that message when it
  * is built; otherwise a JSON report of what this request saw: its route, which probe
- * instances it got, its start time and whether bootstrap ran.
+ * instances it got, its start time and whether bootstrap ran. With `cache_control`, the
+ * report carries that `Cache-Control` header.
  */
 final class RouteEchoHandler implements RequestHandlerInterface
 {
@@ -46,7 +47,7 @@ final class RouteEchoHandler implements RequestHandlerInterface
             );
         }
 
-        return $this->respond(200, \json_encode([
+        $response = $this->respond(200, \json_encode([
             'route' => $this->currentRoute->getName(),
             'id' => $this->currentRoute->getArgument('id'),
             'probe' => \spl_object_id($this->probe),
@@ -54,6 +55,10 @@ final class RouteEchoHandler implements RequestHandlerInterface
             'start' => $request->getAttribute('applicationStartTime'),
             'bootstrapped' => $this->probe->bootstrapped,
         ], \JSON_THROW_ON_ERROR | \JSON_PRESERVE_ZERO_FRACTION));
+
+        return isset($q['cache_control'])
+            ? $response->withHeader('Cache-Control', (string) $q['cache_control'])
+            : $response;
     }
 
     private function respond(int $status, string $body): ResponseInterface
