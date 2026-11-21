@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Integration\Symfony;
 
+use OxPHP\Runtime\Internal\Bridge\OxPHP;
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Runner\HttpKernelRunner;
 use OxPHP\Runtime\Tests\Integration\Symfony\App\ResetCounter;
 use OxPHP\Runtime\Tests\Integration\Symfony\App\TestKernel;
+use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
+use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -42,7 +46,7 @@ final class FiberIsolationKernelTest extends TestCase
 
     protected function setUp(): void
     {
-        RequestScopes::resetForTests();
+        OxPHPHarness::reset();
 
         // Put back in tearDown(): the locale switcher sets the process-wide ICU
         // default locale, a debug kernel's boot sets SHELL_VERBOSITY, and
@@ -58,6 +62,10 @@ final class FiberIsolationKernelTest extends TestCase
 
     protected function tearDown(): void
     {
+        // First, while the kernel still runs: releasing a request the harness
+        // parked after a bailout unwinds it through the kernel.
+        OxPHPHarness::reset();
+
         if ($this->kernel !== null) {
             $container = $this->kernel->getContainer();
             $this->kernel->shutdown();
@@ -203,6 +211,36 @@ final class FiberIsolationKernelTest extends TestCase
 
         self::assertTrue($c->isTerminated());
         self::assertSame(1, $counter->resets, 'The next request on an idle worker resets.');
+    }
+
+    public function test_kernel_reset_goes_on_after_a_request_bails_out_inside_the_kernel(): void
+    {
+        // A request that hits a fatal error, a time limit, exit() or a cancel
+        // inside Kernel::handle() skips every finally there: Symfony's request
+        // depth stays raised and Kernel::boot() never resets services again.
+        $kernel = $this->bootKernel();
+        $counter = $kernel->getContainer()->get(ResetCounter::class);
+        self::assertInstanceOf(ResetCounter::class, $counter);
+
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true)->setBailoutMode(true);
+        $harness->pushRequest(FakeOxRequest::get('/en/hello', ['suspend' => '1']));
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+
+        $resetsSeen = [];
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [
+            // Runs after the built-in resetter, in each request's own chain.
+            static function () use ($counter, &$resetsSeen): void {
+                $resetsSeen[] = $counter->resets;
+            },
+        ])->run();
+
+        self::assertSame(1, $harness->bailouts(), 'The first request bailed out inside the controller.');
+        self::assertSame(['own', 'own'], \array_slice($harness->capturedOutputs(), 1));
+        self::assertSame([1, 2], $resetsSeen, 'Every idle request after the bailout resets kernel.reset services.');
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertTrue(RequestScopes::hasBailedOut());
     }
 
     public function test_a_user_fiber_inside_a_worker_request_sees_no_request(): void

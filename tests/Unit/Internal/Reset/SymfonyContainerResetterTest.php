@@ -72,12 +72,84 @@ final class SymfonyContainerResetterTest extends TestCase
 
     public function test_marker_present_skips_the_teardown(): void
     {
-        $container = $this->createContainer(['oxphp_runtime.fiber_isolation' => true]);
+        $servicesResetter = self::countingResetter();
+        $container = $this->createContainer(['oxphp_runtime.fiber_isolation' => true], ['services_resetter' => $servicesResetter]);
 
         new SymfonyContainerResetter($this->createKernelReturning($container))->reset();
 
         self::assertSame(0, $container->calls);
+        self::assertSame(0, $servicesResetter->resets, 'Kernel::boot() resets on a healthy worker.');
         self::assertSame('', $this->loggedOutput());
+    }
+
+    public function test_after_a_bailout_an_idle_request_resets_the_services_itself(): void
+    {
+        // The bailed-out request left Kernel::handle() without its finally, so
+        // Kernel::boot() never calls services_resetter again.
+        self::markBailedOut();
+
+        $servicesResetter = self::countingResetter();
+        $container = $this->createContainer(['oxphp_runtime.fiber_isolation' => true], ['services_resetter' => $servicesResetter]);
+        $resetter = new SymfonyContainerResetter($this->createKernelReturning($container));
+
+        $request = RequestFiber::start(static function () use ($resetter): void {
+            $resetter->reset();
+        });
+
+        self::assertTrue($request->isTerminated());
+        self::assertSame(1, $servicesResetter->resets);
+        self::assertSame(0, $container->calls, 'No teardown: isolation is still installed.');
+        self::assertSame('', $this->loggedOutput(), 'A client leaving mid-stream is normal; nothing to log.');
+    }
+
+    public function test_after_a_bailout_an_overlapped_request_leaves_the_services_alone(): void
+    {
+        self::markBailedOut();
+
+        $servicesResetter = self::countingResetter();
+        $container = $this->createContainer(['oxphp_runtime.fiber_isolation' => true], ['services_resetter' => $servicesResetter]);
+        $resetter = new SymfonyContainerResetter($this->createKernelReturning($container));
+
+        $other = RequestFiber::start(static function (): void {
+            \Fiber::suspend();
+        });
+        $current = RequestFiber::start(static function () use ($resetter): void {
+            $resetter->reset();
+        });
+        $other->resume();
+
+        self::assertTrue($current->isTerminated());
+        self::assertSame(0, $servicesResetter->resets);
+        self::assertSame(0, $container->calls);
+        self::assertSame('', $this->loggedOutput());
+    }
+
+    public function test_after_a_bailout_a_container_without_services_resetter_is_left_alone(): void
+    {
+        self::markBailedOut();
+
+        $container = $this->createContainer(['oxphp_runtime.fiber_isolation' => true]);
+
+        $request = RequestFiber::start(function () use ($container): void {
+            new SymfonyContainerResetter($this->createKernelReturning($container))->reset();
+        });
+
+        self::assertTrue($request->isTerminated());
+        self::assertSame(0, $container->calls);
+        self::assertSame('', $this->loggedOutput());
+    }
+
+    public function test_without_the_bundle_a_bailout_changes_nothing(): void
+    {
+        self::markBailedOut();
+
+        $servicesResetter = self::countingResetter();
+        $container = $this->createContainer([], ['services_resetter' => $servicesResetter]);
+
+        new SymfonyContainerResetter($this->createKernelReturning($container))->reset();
+
+        self::assertSame(1, $container->calls, 'The teardown resets every service anyway.');
+        self::assertSame(0, $servicesResetter->resets);
     }
 
     public function test_without_the_bundle_it_tears_down_as_before(): void
@@ -169,17 +241,49 @@ final class SymfonyContainerResetterTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $parameters
+     * @return object{resets: int}&ResetInterface
      */
-    private function createContainer(array $parameters = []): ContainerInterface&ResetInterface
+    private static function countingResetter(): ResetInterface
     {
-        return new class ($parameters) implements ContainerInterface, ResetInterface {
+        return new class () implements ResetInterface {
+            public int $resets = 0;
+
+            public function reset(): void
+            {
+                ++$this->resets;
+            }
+        };
+    }
+
+    /**
+     * A request on this worker ended without its finally: its ticket was still
+     * open when its shutdown function ran.
+     */
+    private static function markBailedOut(): void
+    {
+        $fiber = new \Fiber(static function (): void {
+            RequestScopes::leaveRequest(RequestScopes::enterRequest(), atShutdown: true);
+        });
+        $fiber->start();
+
+        self::assertTrue(RequestScopes::hasBailedOut());
+        self::assertSame(0, RequestScopes::inFlight());
+    }
+
+    /**
+     * @param array<string, mixed> $parameters
+     * @param array<string, object> $services
+     */
+    private function createContainer(array $parameters = [], array $services = []): ContainerInterface&ResetInterface
+    {
+        return new class ($parameters, $services) implements ContainerInterface, ResetInterface {
             public int $calls = 0;
 
             /**
              * @param array<string, mixed> $parameters
+             * @param array<string, object> $services
              */
-            public function __construct(private readonly array $parameters) {}
+            public function __construct(private readonly array $parameters, private readonly array $services) {}
 
             public function reset(): void
             {
@@ -188,11 +292,11 @@ final class SymfonyContainerResetterTest extends TestCase
             public function set(string $id, ?object $service): void {}
             public function get(string $id, int $invalidBehavior = 1): ?object
             {
-                return null;
+                return $this->services[$id] ?? null;
             }
             public function has(string $id): bool
             {
-                return false;
+                return isset($this->services[$id]);
             }
             public function initialized(string $id): bool
             {

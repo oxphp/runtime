@@ -25,6 +25,13 @@ use Symfony\Contracts\Service\ResetInterface;
  * on a healthy worker, `reset()` does nothing: the bundle's guarded
  * `services_resetter` does the resetting once the worker is idle.
  *
+ * Except after a bailout (`RequestScopes::hasBailedOut()`): a request that ended
+ * without its `finally` inside `Kernel::handle()` left Symfony's request depth
+ * raised, and `Kernel::boot()` then never calls `services_resetter` again on this
+ * worker. So from the first bailout on, with the marker `true`, each request that
+ * ends with no other in flight calls the container's `services_resetter` itself.
+ * A bailout is not logged: a client leaving mid-stream is one, and is normal.
+ *
  * Without isolation, the first time a request ends while another is still in
  * flight, a hint goes to `error_log()` saying why and what to do. Each hint is
  * logged at most once per resetter instance (one per worker).
@@ -66,6 +73,10 @@ final class SymfonyContainerResetter implements ResetterInterface
 
         if ($hasMarker && $container->getParameter(self::MARKER) === true) {
             if (!RequestScopes::isDegraded()) {
+                if (RequestScopes::hasBailedOut() && RequestScopes::inFlight() <= 1) {
+                    $this->resetServices($container);
+                }
+
                 return;
             }
 
@@ -80,6 +91,23 @@ final class SymfonyContainerResetter implements ResetterInterface
 
         if ($container instanceof ResetInterface) {
             $container->reset();
+        }
+    }
+
+    /**
+     * Calls the container's `services_resetter` (the bundle's guard), as
+     * `Kernel::boot()` would at the next request start.
+     */
+    private function resetServices(ContainerInterface $container): void
+    {
+        if (!$container->has('services_resetter')) {
+            return;
+        }
+
+        $servicesResetter = $container->get('services_resetter');
+
+        if ($servicesResetter instanceof ResetInterface) {
+            $servicesResetter->reset();
         }
     }
 
