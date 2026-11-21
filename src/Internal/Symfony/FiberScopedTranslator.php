@@ -80,6 +80,8 @@ final class FiberScopedTranslator implements TranslatorInterface, TranslatorBagI
     /**
      * An empty locale falls back as stock `Translator::getLocale()` does, to the
      * ICU default locale (`'en'` without intl), never to the inner's shared one.
+     * That default is `intl.default_locale`, which OxPHP 0.12.0+ keeps per request;
+     * on older servers it is the worker's, and the last request to set it wins.
      */
     public function getLocale(): string
     {

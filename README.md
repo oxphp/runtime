@@ -190,6 +190,9 @@ finishes first.
 - Monolog buffering handlers.
 - `slugger` and every other `kernel.locale_aware` service besides the
   translator and the locale switcher.
+- The ICU default locale (`\Locale::getDefault()`), which the locale switcher
+  sets, on OxPHP before 0.12.0. From 0.12.0 OxPHP keeps it per request, as it
+  keeps every ini directive PHP stores with a standard setter.
 - Your own services and singletons.
 - The authorization checker's own stacks, shared as in stock Symfony. While
   a check inside `isGrantedForUser()` waits (a voter in a hooked database or

@@ -20,7 +20,8 @@ use Symfony\Contracts\Translation\LocaleAwareInterface;
  * locale-aware service throws, the new locale stays recorded, exactly as in stock.
  * The scoped services (translator, request context) land that fan-out in their
  * own per-scope state; everything else it reaches (the slugger, app services)
- * stays shared. The parent's private field is therefore never read: `getLocale()`
+ * stays shared. `\Locale::setDefault()` writes `intl.default_locale`, which
+ * OxPHP 0.12.0+ keeps per request, and older servers share. The parent's private field is therefore never read: `getLocale()`
  * answers from the scope.
  *
  * `runWithLocale()` and `reset()` are overridden only to be declared here (so
