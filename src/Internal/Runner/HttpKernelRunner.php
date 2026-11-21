@@ -28,11 +28,12 @@ final class HttpKernelRunner extends AbstractHttpRunner
         private readonly HttpKernelInterface $kernel,
         OxPHP $bridge,
         array $userResetters,
+        array $bootServer = [],
     ) {
         $builtin = $kernel instanceof Kernel
             ? [new SymfonyContainerResetter($kernel)]
             : [];
-        parent::__construct($bridge, new ResetterChain([...$builtin, ...$userResetters]));
+        parent::__construct($bridge, new ResetterChain([...$builtin, ...$userResetters]), $bootServer);
         $this->emitter = new HttpFoundationResponseEmitter($bridge);
         $this->builder = new HttpFoundationRequestBuilder($bridge->serverSoftware());
     }

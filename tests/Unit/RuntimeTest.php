@@ -17,6 +17,7 @@ use OxPHP\Runtime\Tests\Stub\Apps\FakeSymfonyKernel;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\ResponseInterface;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Runtime\RunnerInterface;
 
@@ -25,9 +26,23 @@ final class RuntimeTest extends TestCase
     /** Skip SymfonyRuntime's global error/exception handler registration; tests don't exercise it. */
     private const array NO_HANDLER = ['error_handler' => false];
 
+    /** @var array<string, mixed> */
+    private array $serverBackup;
+    /** @var array<string, mixed> */
+    private array $envBackup;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
+        // SymfonyRuntime boots by writing into both superglobals.
+        $this->serverBackup = $_SERVER;
+        $this->envBackup = $_ENV;
+    }
+
+    protected function tearDown(): void
+    {
+        $_SERVER = $this->serverBackup;
+        $_ENV = $this->envBackup;
     }
 
     public function test_dispatches_psr15_handler_to_psr15_runner(): void
@@ -104,6 +119,62 @@ final class RuntimeTest extends TestCase
         $runner->run();
 
         self::assertSame(1, $called);
+    }
+
+    public function test_worker_requests_see_the_server_vars_the_boot_wrote(): void
+    {
+        // autoload_runtime.php writes APP_RUNTIME just before constructing us.
+        $_SERVER['APP_RUNTIME'] = Runtime::class;
+        // project_dir makes SymfonyRuntime's constructor write APP_PROJECT_DIR,
+        // the same way its dotenv boot writes every .env variable.
+        $runtime = new Runtime(self::NO_HANDLER + ['project_dir' => '/srv/app']);
+        // And the index.php callable runs after construction.
+        $_SERVER['OXPHP_TEST_APP_VAR'] = 'from-callable';
+
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->setRequestServer(['REQUEST_URI' => '/']);
+        $h->pushRequest(FakeOxRequest::get('/'));
+        $h->pushRequest(FakeOxRequest::get('/'));
+
+        $seen = [];
+        $app = new FakePsr15Handler(static function () use (&$seen): ResponseInterface {
+            $seen[] = [
+                $_SERVER['APP_RUNTIME'] ?? null,
+                $_SERVER['APP_PROJECT_DIR'] ?? null,
+                $_SERVER['OXPHP_TEST_APP_VAR'] ?? null,
+            ];
+            return new Psr17Factory()->createResponse(204);
+        });
+        $this->resolveRunner($runtime, $app)->run();
+
+        $expected = [Runtime::class, '/srv/app', 'from-callable'];
+        self::assertSame([$expected, $expected], $seen);
+    }
+
+    public function test_worker_requests_do_not_inherit_the_boot_request(): void
+    {
+        // The server runs the boot inside a synthetic request of its own; with
+        // SUPERGLOBALS_ENABLED=false a real request's $_SERVER lacks these.
+        $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+        $_SERVER['REQUEST_URI'] = '/';
+        $runtime = new Runtime(self::NO_HANDLER);
+        // Header-shaped keys always describe the request, whoever wrote them.
+        $_SERVER['HTTP_X_FROM_BOOT'] = '1';
+
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->setRequestServer([]);
+        $h->pushRequest(FakeOxRequest::get('/'));
+
+        $seen = null;
+        $app = new FakePsr15Handler(static function () use (&$seen): ResponseInterface {
+            $seen = \array_intersect_key($_SERVER, ['REMOTE_ADDR' => 0, 'REQUEST_URI' => 0, 'HTTP_X_FROM_BOOT' => 0]);
+            return new Psr17Factory()->createResponse(204);
+        });
+        $this->resolveRunner($runtime, $app)->run();
+
+        self::assertSame([], $seen);
     }
 
     /**

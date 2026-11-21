@@ -88,20 +88,73 @@ final class AbstractHttpRunnerTest extends TestCase
         self::assertSame(1, $resets);
     }
 
+    public function test_run_worker_puts_boot_server_vars_back_into_every_request(): void
+    {
+        // The soft reset hands each request a $_SERVER of its own, without
+        // what the worker's boot (dotenv, APP_ENV, ...) wrote there.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->setRequestServer(['REQUEST_URI' => '/']);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state): void {
+                $state[] = $_SERVER['MY_VAR'] ?? null;
+            },
+            state: $state,
+            bootServer: ['MY_VAR' => 'hello'],
+        );
+
+        $runner->run();
+
+        self::assertSame(['hello', 'hello'], $state);
+    }
+
+    public function test_boot_server_vars_never_override_what_the_server_set_for_the_request(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->setRequestServer(['REQUEST_URI' => '/real', 'APP_ENV' => 'prod']);
+        $h->pushRequest(FakeOxRequest::get('/real'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state): void {
+                $state = [$_SERVER['REQUEST_URI'], $_SERVER['APP_ENV'], $_SERVER['MY_VAR']];
+            },
+            state: $state,
+            bootServer: ['REQUEST_URI' => '/', 'APP_ENV' => 'dev', 'MY_VAR' => 'hello'],
+        );
+
+        $runner->run();
+
+        self::assertSame(['/real', 'prod', 'hello'], $state);
+    }
+
     /**
      * @param callable(OxRequest, array): void $handler
      * @param list<callable> $resetters
+     * @param array<string, mixed> $bootServer
      */
-    private function newRunner(callable $handler, ?array &$state, array $resetters = []): AbstractHttpRunner
-    {
+    private function newRunner(
+        callable $handler,
+        ?array &$state,
+        array $resetters = [],
+        array $bootServer = [],
+    ): AbstractHttpRunner {
         $state = [];
         $bridge = new OxPHP();
         $chain = new ResetterChain($resetters);
 
-        return new class ($bridge, $chain, $handler, $state) extends AbstractHttpRunner {
-            public function __construct(OxPHP $b, ResetterChain $c, private $handler, private array &$stateRef)
-            {
-                parent::__construct($b, $c);
+        return new class ($bridge, $chain, $bootServer, $handler, $state) extends AbstractHttpRunner {
+            public function __construct(
+                OxPHP $b,
+                ResetterChain $c,
+                array $bootServer,
+                private $handler,
+                private array &$stateRef,
+            ) {
+                parent::__construct($b, $c, $bootServer);
             }
 
             protected function handleRequest(OxRequest $req): void

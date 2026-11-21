@@ -24,6 +24,8 @@ final class OxPHPHarness
     /** @var list<int> */
     private array $statuses = [];
     private int $resetCount = 0;
+    /** @var array<string, mixed>|null */
+    private ?array $requestServer = null;
 
     public static function instance(): self
     {
@@ -53,6 +55,18 @@ final class OxPHPHarness
     public function setWorkerId(int $id): self
     {
         $this->workerId = $id;
+        return $this;
+    }
+
+    /**
+     * Simulate the soft reset rebuilding $_SERVER: driveWorker() starts every
+     * request with exactly this array, and puts the real $_SERVER back after.
+     *
+     * @param array<string, mixed> $server
+     */
+    public function setRequestServer(array $server): self
+    {
+        $this->requestServer = $server;
         return $this;
     }
 
@@ -150,19 +164,27 @@ final class OxPHPHarness
         // status left over from earlier code must not leak into the first one.
         \http_response_code(200);
 
-        foreach ($this->queue as $req) {
-            $this->current = $req;
-            \ob_start();
-            try {
-                $handler();
-            } finally {
-                $this->outputs[] = (string) \ob_get_clean();
-                $this->statuses[] = (int) \http_response_code();
-                // Simulate server-side soft reset: fresh status for the next
-                // iteration so leftover 4xx/5xx codes don't leak.
-                \http_response_code(200);
-                $this->resetCount++;
+        $realServer = $_SERVER;
+        try {
+            foreach ($this->queue as $req) {
+                $this->current = $req;
+                if ($this->requestServer !== null) {
+                    $_SERVER = $this->requestServer;
+                }
+                \ob_start();
+                try {
+                    $handler();
+                } finally {
+                    $this->outputs[] = (string) \ob_get_clean();
+                    $this->statuses[] = (int) \http_response_code();
+                    // Simulate server-side soft reset: fresh status for the next
+                    // iteration so leftover 4xx/5xx codes don't leak.
+                    \http_response_code(200);
+                    $this->resetCount++;
+                }
             }
+        } finally {
+            $_SERVER = $realServer;
         }
         $this->queue = [];
         $this->current = null;
