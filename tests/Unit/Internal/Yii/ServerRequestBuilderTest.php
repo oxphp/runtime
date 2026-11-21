@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Unit\Internal\Yii;
 
 use Nyholm\Psr7\Factory\Psr17Factory;
-use OxPHP\Runtime\Internal\Runner\ServerParams;
 use OxPHP\Runtime\Internal\Yii\ServerRequestBuilder;
+use OxPHP\Runtime\Tests\Stub\CapturedOxPHPServer;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -33,47 +33,41 @@ final class ServerRequestBuilderTest extends TestCase
         $this->tempFiles = [];
     }
 
+    /**
+     * Yii's factory reads the `$_SERVER` the real server registered for the request,
+     * and ours reads the request object.
+     *
+     * @param array<string, int|float|string> $server
+     */
     #[DataProvider('provideMatches_yii_request_factory_for_the_same_http_requestCases')]
-    public function test_matches_yii_request_factory_for_the_same_http_request(FakeOxRequest $ox): void
+    public function test_matches_yii_request_factory_for_the_same_http_request(FakeOxRequest $ox, array $server): void
     {
         $files = $this->uploadFixture();
 
-        self::assertSame(
-            $this->snapshot($this->yiiRequest($ox, $files)),
-            $this->snapshot($this->ours($ox, $files)),
-        );
+        $yii = $this->snapshot($this->yiiRequest($ox, $server, $files));
+        $ours = $this->snapshot($this->ours($ox, $files));
+
+        // What the request API has no source for is missing from ours.
+        $yii['server'] = \array_diff_key($yii['server'], \array_flip(CapturedOxPHPServer::NOT_FROM_THE_API));
+        // The server leaves header names with `_` or `.` out of `$_SERVER`, so Yii's
+        // factory never sees them; the request object has them.
+        $ours['headers'] = \array_diff_key($ours['headers'], ['x_under' => true, 'x.dot' => true]);
+        self::assertSame($yii, $ours);
     }
 
+    /**
+     * @return iterable<string, array{FakeOxRequest, array<string, int|float|string>}>
+     */
     public static function provideMatches_yii_request_factory_for_the_same_http_requestCases(): iterable
     {
-        yield 'GET with query, cookies, host' => [new FakeOxRequest(
-            path: '/a',
-            queryString: 'q=1',
-            headers: ['host' => 'localhost', 'accept' => 'text/html'],
-            cookies: ['s' => 'x'],
-            query: ['q' => '1'],
-        )];
-        yield 'POST urlencoded' => [FakeOxRequest::postForm('/f', ['a' => '1', 'b' => ['c' => '2']])];
-        yield 'POST multipart' => [new FakeOxRequest(
-            method: 'POST',
-            path: '/u',
-            headers: ['content-type' => 'multipart/form-data; boundary=x'],
-            payload: ['title' => 't'],
-        )];
-        yield 'POST JSON stays unparsed' => [new FakeOxRequest(
-            method: 'POST',
-            path: '/j',
-            headers: ['content-type' => 'application/json'],
-            payload: ['a' => 1],
-            body: '{"a":1}',
-        )];
-        yield 'PUT urlencoded stays unparsed' => [new FakeOxRequest(
-            method: 'PUT',
-            path: '/p',
-            headers: ['content-type' => 'application/x-www-form-urlencoded'],
-            payload: ['a' => '1'],
-            body: 'a=1',
-        )];
+        yield 'GET with query, cookie and header names with _ or .' => CapturedOxPHPServer::get();
+        yield 'POST urlencoded' => CapturedOxPHPServer::post();
+        yield 'host and port from the Host header' => CapturedOxPHPServer::hostWithPort();
+        $nested = ['a' => '1', 'b' => ['c' => '2']];
+        yield 'POST urlencoded, nested' => CapturedOxPHPServer::postWith('POST', '/f', 'application/x-www-form-urlencoded', \http_build_query($nested), $nested);
+        yield 'POST multipart' => CapturedOxPHPServer::postWith('POST', '/u', 'multipart/form-data; boundary=x', '', ['title' => 't']);
+        yield 'POST JSON stays unparsed' => CapturedOxPHPServer::postWith('POST', '/j', 'application/json', '{"a":1}', ['a' => 1]);
+        yield 'PUT urlencoded stays unparsed' => CapturedOxPHPServer::postWith('PUT', '/p', 'application/x-www-form-urlencoded', 'a=1', ['a' => '1']);
     }
 
     public function test_uploads_are_keyed_and_nested_by_field_name(): void
@@ -118,8 +112,11 @@ final class ServerRequestBuilderTest extends TestCase
         self::assertArrayNotHasKey('HTTP_X_LEAK', $request->getServerParams());
     }
 
-    /** @param array<string, mixed> $files the `$_FILES` value to build uploads from */
-    private function yiiRequest(FakeOxRequest $ox, array $files): ServerRequestInterface
+    /**
+     * @param array<string, int|float|string> $server the `$_SERVER` to build the request from
+     * @param array<string, mixed> $files the `$_FILES` value to build uploads from
+     */
+    private function yiiRequest(FakeOxRequest $ox, array $server, array $files): ServerRequestInterface
     {
         $f = new Psr17Factory();
         $body = \fopen('php://memory', 'r+');
@@ -129,7 +126,7 @@ final class ServerRequestBuilderTest extends TestCase
 
         $saved = [$_SERVER, $_GET, $_POST, $_COOKIE, $_FILES];
         try {
-            $_SERVER = ServerParams::build($ox, 'OxPHP/0.0.0-test');
+            $_SERVER = $server;
             $_GET = $ox->query() ?? [];
             $_POST = \is_array($ox->payload()) ? $ox->payload() : [];
             $_COOKIE = $ox->cookies();
@@ -150,7 +147,7 @@ final class ServerRequestBuilderTest extends TestCase
         try {
             $_FILES = $files;
 
-            return ServerRequestBuilder::build($ox, $f, $f, $f, 'OxPHP/0.0.0-test');
+            return ServerRequestBuilder::build($ox, $f, $f, $f, CapturedOxPHPServer::SOFTWARE);
         } finally {
             $_FILES = $saved;
         }
@@ -161,13 +158,15 @@ final class ServerRequestBuilderTest extends TestCase
     {
         $headers = \array_change_key_case($r->getHeaders());
         \ksort($headers);
+        $server = $r->getServerParams();
+        \ksort($server);
 
         return [
             'method' => $r->getMethod(),
             'uri' => (string) $r->getUri(),
             'protocol' => $r->getProtocolVersion(),
             'headers' => $headers,
-            'server' => $r->getServerParams(),
+            'server' => $server,
             'query' => $r->getQueryParams(),
             'cookies' => $r->getCookieParams(),
             'parsedBody' => $r->getParsedBody(),
