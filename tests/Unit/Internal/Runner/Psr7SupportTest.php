@@ -5,14 +5,19 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
 
 use Nyholm\Psr7\Factory\Psr17Factory;
+use Nyholm\Psr7\Stream;
 use OxPHP\Runtime\Internal\Runner\Psr7Support;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
+use OxPHP\Runtime\Tests\Stub\MisreportedSizeStream;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class Psr7SupportTest extends TestCase
 {
+    private const int LIMIT = 3 * 1024 * 1024;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
@@ -93,6 +98,91 @@ final class Psr7SupportTest extends TestCase
         }
     }
 
+    /**
+     * @return iterable<string, array{\Closure(string): MisreportedSizeStream, int}>
+     */
+    public static function provideA_body_whose_size_is_wrong_or_unknown_is_read_in_bounded_steps_and_streamed_once_it_passes_the_limitCases(): iterable
+    {
+        $pipe = MisreportedSizeStream::pipe(...);
+        $seekable = static fn (?int $size): \Closure => static function (string $contents) use ($size): MisreportedSizeStream {
+            $stream = new MisreportedSizeStream(new Psr17Factory()->createStream($contents), $size, true);
+            $stream->read(5); // a consumed stream is rewound
+
+            return $stream;
+        };
+
+        yield 'pipe (size 0, not seekable), over the limit' => [$pipe, self::LIMIT + 20_000];
+        yield 'pipe, one byte over the limit' => [$pipe, self::LIMIT + 1];
+        yield 'seekable, reports size 0, over the limit' => [$seekable(0), self::LIMIT + 20_000];
+        yield 'seekable, reports a small size, over the limit' => [$seekable(100), self::LIMIT + 20_000];
+        yield 'seekable, unknown size, over the limit' => [$seekable(null), self::LIMIT + 20_000];
+    }
+
+    /**
+     * @param \Closure(string): MisreportedSizeStream $make
+     */
+    #[DataProvider('provideA_body_whose_size_is_wrong_or_unknown_is_read_in_bounded_steps_and_streamed_once_it_passes_the_limitCases')]
+    public function test_a_body_whose_size_is_wrong_or_unknown_is_read_in_bounded_steps_and_streamed_once_it_passes_the_limit(\Closure $make, int $bytes): void
+    {
+        $contents = self::numbered($bytes);
+        $stream = $make($contents);
+
+        $body = Psr7Support::emittableBody($stream);
+
+        self::assertInstanceOf(\Generator::class, $body);
+        $chunks = \iterator_to_array($body, false);
+        // Every byte once, in order: nothing read ahead is lost, and no rewind repeats it.
+        self::assertSame(\md5($contents), \md5(\implode('', $chunks)));
+        self::assertLessThanOrEqual(self::LIMIT + 1, \max(\array_map(\strlen(...), $chunks)));
+        self::assertLessThanOrEqual(8192, \max($stream->reads));
+        self::assertFalse($stream->readWhole);
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function provideA_piped_body_up_to_the_limit_is_read_in_bounded_steps_and_emitted_as_one_stringCases(): iterable
+    {
+        yield 'empty' => [0];
+        yield 'small' => [20_000];
+        yield 'exactly the limit' => [self::LIMIT];
+    }
+
+    #[DataProvider('provideA_piped_body_up_to_the_limit_is_read_in_bounded_steps_and_emitted_as_one_stringCases')]
+    public function test_a_piped_body_up_to_the_limit_is_read_in_bounded_steps_and_emitted_as_one_string(int $bytes): void
+    {
+        $contents = self::numbered($bytes);
+        $stream = MisreportedSizeStream::pipe($contents);
+
+        $body = Psr7Support::emittableBody($stream);
+
+        self::assertIsString($body);
+        self::assertSame(\md5($contents), \md5($body));
+        self::assertLessThanOrEqual(8192, \max([0, ...$stream->reads]));
+        self::assertFalse($stream->readWhole);
+    }
+
+    public function test_a_real_pipe_reports_size_0_and_is_still_streamed_once_it_passes_the_limit(): void
+    {
+        $over = self::LIMIT + 20_000;
+        $small = self::popen(100);
+        $large = self::popen($over);
+
+        try {
+            // What makes a pipe a trap: Nyholm caches the size fstat() gives it.
+            self::assertSame(0, $large->getSize());
+            self::assertFalse($large->isSeekable());
+
+            self::assertSame(self::numbered(100), Psr7Support::emittableBody($small));
+            $body = Psr7Support::emittableBody($large);
+            self::assertInstanceOf(\Generator::class, $body);
+            self::assertSame(\md5(self::numbered($over)), \md5(\implode('', \iterator_to_array($body, false))));
+        } finally {
+            $small->close();
+            $large->close();
+        }
+    }
+
     public function test_a_body_that_cannot_be_read_is_emitted_as_nothing(): void
     {
         $path = (string) \tempnam(\sys_get_temp_dir(), 'oxphp-runtime-test');
@@ -104,5 +194,30 @@ final class Psr7SupportTest extends TestCase
             $stream->close();
             \unlink($path);
         }
+    }
+
+    /**
+     * $bytes of numbered 8-byte lines, so a repeated or a dropped piece changes it.
+     */
+    private static function numbered(int $bytes): string
+    {
+        $out = '';
+        for ($i = 0; \strlen($out) < $bytes; ++$i) {
+            $out .= \sprintf("%07d\n", $i);
+        }
+
+        return \substr($out, 0, $bytes);
+    }
+
+    /**
+     * A stream on the output of a child process that prints self::numbered($bytes).
+     */
+    private static function popen(int $bytes): Stream
+    {
+        $code = \sprintf('$o = ""; for ($i = 0; strlen($o) < %1$d; ++$i) { $o .= sprintf("%%07d\\n", $i); } echo substr($o, 0, %1$d);', $bytes);
+        $pipe = \popen(\escapeshellarg(\PHP_BINARY) . ' -r ' . \escapeshellarg($code), 'r');
+        self::assertIsResource($pipe);
+
+        return Stream::create($pipe);
     }
 }

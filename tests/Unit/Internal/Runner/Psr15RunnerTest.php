@@ -11,6 +11,7 @@ use OxPHP\Runtime\Internal\Runner\Psr15Runner;
 use OxPHP\Runtime\Tests\Stub\Apps\FakePsr15Handler;
 use OxPHP\Runtime\Tests\Stub\CapturedOxPHPServer;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
+use OxPHP\Runtime\Tests\Stub\MisreportedSizeStream;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
 use OxPHP\Runtime\Tests\Stub\UploadedFilesFixture;
@@ -240,6 +241,28 @@ final class Psr15RunnerTest extends TestCase
         self::assertSame([20000, 20000], \array_map(\strlen(...), $h->capturedOutputs()));
         // Flushes before each request and after the last: none for the known size, one per chunk for the unknown.
         self::assertSame([0, 0, 3], $flushes);
+    }
+
+    public function test_a_piped_body_reporting_size_0_is_sent_whole_up_to_the_limit_and_flushed_per_chunk_past_it(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/small'))->pushRequest(FakeOxRequest::get('/large'));
+        $small = \str_repeat('s', 20000);
+        $large = \str_repeat('0123456789abcdef', 196608) . \str_repeat('L', 20000); // 3 MiB + 20000
+        $flushes = [];
+        $handler = new FakePsr15Handler(static function (ServerRequestInterface $r) use ($h, $small, $large, &$flushes): ResponseInterface {
+            $flushes[] = $h->flushCount();
+
+            return new Psr17Factory()->createResponse()->withBody(MisreportedSizeStream::pipe($r->getUri()->getPath() === '/small' ? $small : $large));
+        });
+
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        $flushes[] = $h->flushCount();
+
+        self::assertSame([\md5($small), \md5($large)], \array_map(\md5(...), $h->capturedOutputs()));
+        // None for the small body; past the limit, one for what was read ahead, then one per 8 KiB chunk.
+        self::assertSame([0, 0, 4], $flushes);
     }
 
     public function test_the_request_carries_the_server_params_oxphp_registers_except_what_the_request_api_has_no_source_for(): void

@@ -282,11 +282,14 @@ Streamed callbacks are driven **live**: every `echo` inside a
 chunks are never collected and replayed after the callback returns. The
 runtime enables PHP's implicit flush while driving the callback, so the
 engine pushes each chunk through the OxPHP SAPI's flush hook on write;
-the callback does not need to call `flush()` itself. A PSR-7 body of known
-size up to 3 MiB, the most OxPHP compresses, is read whole before the headers
-go out and sent without a flush, so the server can compress it; a larger body,
-or one of unknown size, is flushed per 8 KiB chunk via `oxphp_stream_flush()`,
-and OxPHP never compresses a streamed body. An exception thrown
+the callback does not need to call `flush()` itself. A PSR-7 body that
+reports a size up to 3 MiB, the most OxPHP compresses, is read before the
+headers go out, 8 KiB at a time and never more than 3 MiB plus one byte. If it
+ends within 3 MiB, it is sent whole without a flush, so the server can
+compress it. If not (a pipe or a socket reports size 0), what was read is the
+first chunk and the rest follows. A body that reports more than 3 MiB, or no
+size, is flushed per 8 KiB chunk via `oxphp_stream_flush()` from the first
+byte, and OxPHP never compresses a streamed body. An exception thrown
 mid-stream closes the runtime's output buffers cleanly (bytes already
 streamed stay sent, partial buffers are discarded) and never poisons the
 worker.
