@@ -130,6 +130,71 @@ final class ContainerBlueprintTest extends TestCase
         self::assertSame([$instances[SharedProbe::class]], $bp->createRequestContainer()->get('tag@probes'));
     }
 
+    public function test_an_id_defined_again_by_a_provider_is_in_the_tags_of_both_definitions(): void
+    {
+        $provider = new class () implements ServiceProviderInterface {
+            public function getDefinitions(): array
+            {
+                return [SharedProbe::class => ['class' => SharedProbe::class, 'tags' => ['b']]];
+            }
+
+            public function getExtensions(): array
+            {
+                return [];
+            }
+        };
+        $bp = $this->blueprint($this->config(
+            [SharedProbe::class => ['class' => SharedProbe::class, 'tags' => ['a']]],
+            providers: [$provider],
+        ));
+        $instances = SharedServices::resolve($bp, [SharedProbe::class], false);
+        $container = $bp->withSharedInstances($instances)->createRequestContainer();
+
+        self::assertSame([$instances[SharedProbe::class]], $container->get('tag@a'));
+        self::assertSame([$instances[SharedProbe::class]], $container->get('tag@b'));
+    }
+
+    public function test_tag_order_matches_a_container_built_from_the_same_config(): void
+    {
+        $provider = new class () implements ServiceProviderInterface {
+            public function getDefinitions(): array
+            {
+                return [SharedProbe::class => ['class' => SharedProbe::class, 'tags' => ['x']]];
+            }
+
+            public function getExtensions(): array
+            {
+                return [];
+            }
+        };
+        $config = $this->config(
+            [
+                // Also in the tags group, so it must not be added twice.
+                CurrentRoute::class => [
+                    'class' => CurrentRoute::class,
+                    'tags' => ['x'],
+                    'reset' => function (): void {
+                        $this->route = null;
+                    },
+                ],
+                PerRequestProbe::class => ['class' => PerRequestProbe::class, 'tags' => ['x']],
+            ],
+            providers: [$provider],
+            tags: ['x' => [CurrentRoute::class]],
+        );
+        $reference = new Container(
+            ContainerConfig::create()
+                ->withDefinitions([...$config->get('di'), ConfigInterface::class => $config])
+                ->withProviders($config->get('providers'))
+                ->withTags($config->get('tags')),
+        );
+        $classes = static fn (array $services): array => \array_map(static fn (object $service): string => $service::class, $services);
+
+        $expected = $classes($reference->get('tag@x'));
+        self::assertSame([CurrentRoute::class, PerRequestProbe::class, SharedProbe::class], $expected);
+        self::assertSame($expected, $classes($this->blueprint($config)->createRequestContainer()->get('tag@x')));
+    }
+
     public function test_an_alias_to_a_listed_service_resolves_to_the_shared_instance(): void
     {
         $bp = $this->blueprint($this->config(['probe.alias' => Reference::to(SharedProbe::class)]));
