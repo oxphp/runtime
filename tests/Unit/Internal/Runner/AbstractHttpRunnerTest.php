@@ -104,7 +104,7 @@ final class AbstractHttpRunnerTest extends TestCase
         self::assertSame(500, $r['status'], $r['stderr']);
         self::assertSame(['text/plain; charset=utf-8'], self::headerValues($r['headers'], 'Content-Type'));
         self::assertSame([], self::headerValues($r['headers'], 'Content-Disposition'));
-        self::assertNotContains('20000', self::headerValues($r['headers'], 'Content-Length'));
+        self::assertSame([], self::headerValues($r['headers'], 'Content-Length'));
         self::assertSame("Internal Server Error\n", $r['body']);
         self::assertStringContainsString('body failed before any output', $r['stderr']);
     }

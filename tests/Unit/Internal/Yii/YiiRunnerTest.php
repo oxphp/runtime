@@ -111,6 +111,8 @@ final class YiiRunnerTest extends TestCase
         self::assertSame([500, 200], $h->capturedStatuses());
         self::assertSame("Internal Server Error\n", $h->capturedOutputs()[0]);
         self::assertStringContainsString('catcher boom', $log);
+        // As in HttpApplicationRunner, afterEmit() still runs for the failed request, with no response.
+        self::assertSame(2, \array_count_values(EventLog::$events)['AfterEmit']);
     }
 
     public function test_a_request_whose_setup_throws_gets_the_fallback_500_and_the_next_is_served(): void
@@ -215,6 +217,28 @@ final class YiiRunnerTest extends TestCase
         self::assertSame(3, $h->flushCount());
     }
 
+    public function test_a_no_content_response_is_sent_without_its_body(): void
+    {
+        $h = OxPHPHarness::instance()->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/', ['route' => 'ok', 'status' => '204']));
+
+        $this->runner()->run();
+
+        self::assertSame([204], $h->capturedStatuses());
+        self::assertSame([''], $h->capturedOutputs());
+    }
+
+    public function test_a_head_request_is_answered_without_a_body(): void
+    {
+        $h = OxPHPHarness::instance()->setWorker(true);
+        $h->pushRequest(new FakeOxRequest(method: 'HEAD', path: '/', queryString: 'route=ok', query: ['route' => 'ok']));
+
+        $this->runner()->run();
+
+        self::assertSame([200], $h->capturedStatuses());
+        self::assertSame([''], $h->capturedOutputs());
+    }
+
     public function test_a_given_emitter_is_used_instead_of_the_response_emitter(): void
     {
         $emitter = new RecordingEmitter();
@@ -235,6 +259,7 @@ final class YiiRunnerTest extends TestCase
         $r = self::runUnderPhpCgi('emitAfterTheSessionCacheLimiter');
 
         self::assertSame(200, $r['status'], $r['stderr']);
+        self::assertSame('', $r['stderr']);
         self::assertSame(['public, max-age=60'], self::headerValues($r['headers'], 'Cache-Control'));
         self::assertSame([], self::headerValues($r['headers'], 'Expires'));
         self::assertSame([], self::headerValues($r['headers'], 'Pragma'));
