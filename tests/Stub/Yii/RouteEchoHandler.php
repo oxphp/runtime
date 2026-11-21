@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Stub\Yii;
 
+use OxPHP\Runtime\Tests\Stub\ThrowingReadStream;
+use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -13,11 +15,12 @@ use Yiisoft\Injector\Injector;
 use Yiisoft\Router\CurrentRoute;
 
 /**
- * The application's fallback handler. With `size` it returns that many bytes, with
- * `status` that status. With `render` it returns a body rendered when it is first read,
- * through the request's `Injector`, as a Yii view renderer renders a view, so the
- * response holds the request container; with `render_throw`, such a body whose
- * rendering throws that message. Otherwise it returns a JSON report of what this
+ * The application's fallback handler. With `size` it returns that many bytes (with
+ * `unsized`, in a body that reports no size; with `read_throw`, in one that throws
+ * after 8192 bytes are read), with `status` that status. With `render` it returns a
+ * body rendered when it is first read, through the request's `Injector`, as a Yii
+ * view renderer renders a view, so the response holds the request container; with
+ * `render_throw`, such a body whose rendering throws that message. Otherwise it returns a JSON report of what this
  * request saw: its route, which probe instances it got, its start time and whether
  * bootstrap ran. With `cache_control`, the report carries that `Cache-Control` header.
  */
@@ -36,7 +39,13 @@ final class RouteEchoHandler implements RequestHandlerInterface
         $q = $request->getQueryParams();
 
         if (isset($q['size'])) {
-            return $this->respond(200, \str_repeat('x', (int) $q['size']));
+            $response = $this->respond(200, \str_repeat('x', (int) $q['size']));
+
+            return match (true) {
+                isset($q['unsized']) => $response->withBody(new UnknownSizeStream($response->getBody())),
+                isset($q['read_throw']) => $response->withBody(new ThrowingReadStream((int) $q['size'], 8192)),
+                default => $response,
+            };
         }
 
         if (isset($q['status'])) {

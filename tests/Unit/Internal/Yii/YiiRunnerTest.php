@@ -206,7 +206,7 @@ final class YiiRunnerTest extends TestCase
         self::assertSame([0, 0], YiiFixture::$liveEarlierContainers);
     }
 
-    public function test_a_streamed_body_is_flushed_per_chunk(): void
+    public function test_a_body_of_known_size_is_sent_whole_without_a_flush_so_the_server_can_compress_it(): void
     {
         $h = OxPHPHarness::instance()->setWorker(true);
         $h->pushRequest(FakeOxRequest::get('/', ['route' => 's', 'size' => '20000']));
@@ -214,7 +214,41 @@ final class YiiRunnerTest extends TestCase
         $this->runner()->run();
 
         self::assertSame(20000, \strlen($h->capturedOutputs()[0]));
-        self::assertSame(3, $h->flushCount());
+        self::assertSame(0, $h->flushCount());
+    }
+
+    public function test_a_body_of_known_size_that_fails_partway_through_reading_gets_the_fallback_500_with_none_of_it_sent(): void
+    {
+        // It is read whole before the headers go out, so the client never sees a 200 cut short.
+        $h = OxPHPHarness::instance()->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/', ['route' => 's', 'size' => '20000', 'read_throw' => '1']))->pushRequest(FakeOxRequest::get('/', ['route' => 'ok']));
+
+        $log = $this->log(fn () => $this->runner()->run());
+
+        self::assertSame([500, 200], $h->capturedStatuses());
+        self::assertSame("Internal Server Error\n", $h->capturedOutputs()[0]);
+        self::assertStringContainsString('Read failed after 8192 bytes', $log);
+    }
+
+    /**
+     * @return iterable<string, array{int, bool}>
+     */
+    public static function provideA_body_of_unknown_size_or_over_the_compression_limit_is_flushed_per_chunkCases(): iterable
+    {
+        yield 'unknown size' => [20000, true];
+        yield 'over the limit' => [3 * 1024 * 1024 + 1, false];
+    }
+
+    #[DataProvider('provideA_body_of_unknown_size_or_over_the_compression_limit_is_flushed_per_chunkCases')]
+    public function test_a_body_of_unknown_size_or_over_the_compression_limit_is_flushed_per_chunk(int $size, bool $unsized): void
+    {
+        $h = OxPHPHarness::instance()->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/', ['route' => 's', 'size' => (string) $size, ...($unsized ? ['unsized' => '1'] : [])]));
+
+        $this->runner()->run();
+
+        self::assertSame($size, \strlen($h->capturedOutputs()[0]));
+        self::assertSame((int) \ceil($size / 8192), $h->flushCount());
     }
 
     public function test_a_no_content_response_is_sent_without_its_body(): void

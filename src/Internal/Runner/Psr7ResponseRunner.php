@@ -33,7 +33,7 @@ final class Psr7ResponseRunner implements RunnerInterface
         $this->emitter->emit(
             $this->response->getStatusCode(),
             $this->response->getHeaders(),
-            Psr7Support::bodyChunks($this->response->getBody()),
+            Psr7Support::emittableBody($this->response->getBody()),
         );
         return 0;
     }

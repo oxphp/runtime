@@ -8,6 +8,7 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 use OxPHP\Runtime\Internal\Runner\Psr7Support;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
 use PHPUnit\Framework\TestCase;
 
 final class Psr7SupportTest extends TestCase
@@ -62,6 +63,43 @@ final class Psr7SupportTest extends TestCase
         try {
             self::assertFalse($stream->isReadable());
             self::assertSame([], \iterator_to_array(Psr7Support::bodyChunks($stream), false));
+        } finally {
+            $stream->close();
+            \unlink($path);
+        }
+    }
+
+    public function test_a_body_of_known_size_up_to_the_compression_limit_is_emitted_as_one_string_from_the_start(): void
+    {
+        $stream = new Psr17Factory()->createStream(\str_repeat('x', 3 * 1024 * 1024 - 1) . 'y');
+        $stream->read(5); // a consumed stream is rewound
+
+        $body = Psr7Support::emittableBody($stream);
+
+        self::assertIsString($body);
+        self::assertSame(3 * 1024 * 1024, \strlen($body));
+        self::assertStringEndsWith('xy', $body);
+    }
+
+    public function test_a_body_over_the_compression_limit_or_of_unknown_size_is_emitted_as_chunks(): void
+    {
+        $f = new Psr17Factory();
+
+        foreach ([$f->createStream(\str_repeat('x', 3 * 1024 * 1024 + 1)), new UnknownSizeStream($f->createStream('abc'))] as $stream) {
+            $body = Psr7Support::emittableBody($stream);
+
+            self::assertInstanceOf(\Generator::class, $body);
+            self::assertSame((string) $stream, \implode('', \iterator_to_array($body, false)));
+        }
+    }
+
+    public function test_a_body_that_cannot_be_read_is_emitted_as_nothing(): void
+    {
+        $path = (string) \tempnam(\sys_get_temp_dir(), 'oxphp-runtime-test');
+        $stream = new Psr17Factory()->createStreamFromFile($path, 'w');
+
+        try {
+            self::assertSame('', Psr7Support::emittableBody($stream));
         } finally {
             $stream->close();
             \unlink($path);

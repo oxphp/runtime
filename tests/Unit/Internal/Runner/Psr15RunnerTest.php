@@ -11,6 +11,7 @@ use OxPHP\Runtime\Internal\Runner\Psr15Runner;
 use OxPHP\Runtime\Tests\Stub\Apps\FakePsr15Handler;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
 use OxPHP\Runtime\Tests\Stub\UploadedFilesFixture;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -216,5 +217,27 @@ final class Psr15RunnerTest extends TestCase
 
         self::assertSame([201], $h->capturedStatuses());
         self::assertSame([''], $h->capturedOutputs());
+    }
+
+    public function test_a_body_of_known_size_is_sent_whole_and_one_of_unknown_size_is_flushed_per_chunk(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/known'))->pushRequest(FakeOxRequest::get('/unknown'));
+        $f = new Psr17Factory();
+        $flushes = [];
+        $handler = new FakePsr15Handler(static function (ServerRequestInterface $r) use ($f, $h, &$flushes): ResponseInterface {
+            $flushes[] = $h->flushCount();
+            $body = $f->createStream(\str_repeat('x', 20000));
+
+            return $f->createResponse()->withBody($r->getUri()->getPath() === '/known' ? $body : new UnknownSizeStream($body));
+        });
+
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        $flushes[] = $h->flushCount();
+
+        self::assertSame([20000, 20000], \array_map(\strlen(...), $h->capturedOutputs()));
+        // Flushes before each request and after the last: none for the known size, one per chunk for the unknown.
+        self::assertSame([0, 0, 3], $flushes);
     }
 }

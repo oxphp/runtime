@@ -46,7 +46,7 @@ final class Psr15Runner extends AbstractHttpRunner
         $this->emitter->emit(
             $response->getStatusCode(),
             $response->getHeaders(),
-            Psr7Support::bodyChunks($response->getBody()),
+            Psr7Support::emittableBody($response->getBody()),
         );
     }
 

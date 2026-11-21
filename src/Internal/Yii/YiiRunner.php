@@ -137,7 +137,7 @@ final class YiiRunner extends AbstractHttpRunner
         $this->responseEmitter->emit(
             $response->getStatusCode(),
             $response->getHeaders(),
-            Psr7Support::bodyChunks($response->getBody()),
+            Psr7Support::emittableBody($response->getBody()),
         );
     }
 }

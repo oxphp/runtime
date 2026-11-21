@@ -41,5 +41,7 @@ final class Psr7ResponseRunnerTest extends TestCase
 
         self::assertSame(0, $code);
         self::assertSame('hello', $out);
+        // Known size: sent whole, so the server buffers it and may compress it.
+        self::assertSame(0, OxPHPHarness::instance()->flushCount());
     }
 }
