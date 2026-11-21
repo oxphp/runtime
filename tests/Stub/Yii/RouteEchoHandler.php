@@ -7,15 +7,19 @@ namespace OxPHP\Runtime\Tests\Stub\Yii;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Message\StreamInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use Yiisoft\Injector\Injector;
 use Yiisoft\Router\CurrentRoute;
 
 /**
  * The application's fallback handler. With `size` it returns that many bytes, with
- * `status` that status, with `render_throw` a body that throws that message when it
- * is built; otherwise a JSON report of what this request saw: its route, which probe
- * instances it got, its start time and whether bootstrap ran. With `cache_control`, the
- * report carries that `Cache-Control` header.
+ * `status` that status. With `render` it returns a body rendered when it is first read,
+ * through the request's `Injector`, as a Yii view renderer renders a view, so the
+ * response holds the request container; with `render_throw`, such a body whose
+ * rendering throws that message. Otherwise it returns a JSON report of what this
+ * request saw: its route, which probe instances it got, its start time and whether
+ * bootstrap ran. With `cache_control`, the report carries that `Cache-Control` header.
  */
 final class RouteEchoHandler implements RequestHandlerInterface
 {
@@ -24,6 +28,7 @@ final class RouteEchoHandler implements RequestHandlerInterface
         private readonly PerRequestProbe $probe,
         private readonly SharedProbe $shared,
         private readonly ResponseFactoryInterface $responses,
+        private readonly Injector $injector,
     ) {}
 
     public function handle(ServerRequestInterface $request): ResponseInterface
@@ -38,12 +43,12 @@ final class RouteEchoHandler implements RequestHandlerInterface
             return $this->respond((int) $q['status'], 'status-body');
         }
 
-        if (isset($q['render_throw'])) {
-            $message = (string) $q['render_throw'];
+        if (isset($q['render']) || isset($q['render_throw'])) {
+            $failure = isset($q['render_throw']) ? (string) $q['render_throw'] : null;
 
             return new DeferredBodyResponse(
                 $this->responses->createResponse(),
-                static fn (): never => throw new \RuntimeException($message),
+                fn (): StreamInterface => $this->render($failure),
             );
         }
 
@@ -59,6 +64,22 @@ final class RouteEchoHandler implements RequestHandlerInterface
         return isset($q['cache_control'])
             ? $response->withHeader('Cache-Control', (string) $q['cache_control'])
             : $response;
+    }
+
+    private function render(?string $failure): StreamInterface
+    {
+        $html = $this->injector->invoke(static function (CurrentRoute $route) use ($failure): string {
+            if ($failure !== null) {
+                throw new \RuntimeException($failure);
+            }
+
+            return '<h1>' . $route->getName() . '</h1>';
+        });
+
+        $body = $this->responses->createResponse()->getBody();
+        $body->write($html);
+
+        return $body;
     }
 
     private function respond(int $status, string $body): ResponseInterface

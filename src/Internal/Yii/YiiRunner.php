@@ -102,7 +102,10 @@ final class YiiRunner extends AbstractHttpRunner
             }
         } finally {
             // Request containers hold reference cycles; collect them before the next request.
-            unset($container, $app);
+            // Every local of the request goes first: a response or a throwable's trace can
+            // reach the container, and anything still held keeps it alive through the collection.
+            // A throwable propagating from here is held by the engine, not by these variables.
+            unset($container, $app, $streams, $request, $response, $prepared, $e, $afterEmitError);
             \gc_collect_cycles();
         }
     }

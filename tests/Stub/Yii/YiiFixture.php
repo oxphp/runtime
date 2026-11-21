@@ -29,11 +29,24 @@ use Yiisoft\Yii\Http\Application;
  */
 final class YiiFixture
 {
+    /**
+     * Per request tracked by `trackContainers()`: how many earlier request containers were
+     * still alive when it bootstrapped.
+     *
+     * @var list<int>
+     */
+    public static array $liveEarlierContainers = [];
+
     private static bool $failed = false;
+
+    /** @var list<\WeakReference<ContainerInterface>> */
+    private static array $containers = [];
 
     public static function reset(): void
     {
         self::$failed = false;
+        self::$containers = [];
+        self::$liveEarlierContainers = [];
     }
 
     /**
@@ -62,6 +75,21 @@ final class YiiFixture
         return static function (ContainerInterface $c): void {
             $c->get(PerRequestProbe::class)->bootstrapped = true;
             EventLog::$events[] = 'Bootstrap';
+        };
+    }
+
+    /**
+     * A bootstrap callback that records, in `$liveEarlierContainers`, how many earlier
+     * request containers are still alive, then starts tracking this request's.
+     */
+    public static function trackContainers(): \Closure
+    {
+        return static function (ContainerInterface $c): void {
+            self::$liveEarlierContainers[] = \count(\array_filter(
+                self::$containers,
+                static fn (\WeakReference $ref): bool => $ref->get() !== null,
+            ));
+            self::$containers[] = \WeakReference::create($c);
         };
     }
 

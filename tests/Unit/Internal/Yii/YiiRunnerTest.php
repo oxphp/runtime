@@ -17,6 +17,7 @@ use OxPHP\Runtime\Tests\Stub\Yii\EventLog;
 use OxPHP\Runtime\Tests\Stub\Yii\RecordingEmitter;
 use OxPHP\Runtime\Tests\Stub\Yii\SharedProbe;
 use OxPHP\Runtime\Tests\Stub\Yii\YiiFixture;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\PsrEmitter\EmitterInterface;
@@ -164,6 +165,43 @@ final class YiiRunnerTest extends TestCase
         }
         self::assertCount(2, $h->capturedOutputs());
         self::assertSame(2, \array_count_values(EventLog::$events)['Bootstrap']);
+    }
+
+    /**
+     * @return iterable<string, array{array<string, string>, ?string}>
+     */
+    public static function provideA_request_container_is_collected_before_the_next_request_startsCases(): iterable
+    {
+        yield 'served' => [['route' => 'one'], null];
+        // The response holds the container, through the Injector its body renders with.
+        yield 'served with a rendered body' => [['route' => 'view', 'render' => '1'], null];
+        // The throwable's trace holds the handler, and the handler the Injector.
+        yield 'the handler throws' => [['throw' => 'boom'], null];
+        // ErrorCatcher's response replaces it, but the throwable's trace holds the failed response.
+        yield 'the body fails to render' => [['route' => 'view', 'render_throw' => 'view boom'], null];
+        yield 'an AfterEmit listener throws' => [['route' => 'one'], 'AfterEmit'];
+    }
+
+    /**
+     * @param array<string, string> $query
+     */
+    #[DataProvider('provideA_request_container_is_collected_before_the_next_request_startsCases')]
+    public function test_a_request_container_is_collected_before_the_next_request_starts(array $query, ?string $throwOn): void
+    {
+        // A container holds reference cycles, so only a collection frees it; anything of the
+        // request's still held when the runner collects keeps the whole container alive.
+        $previous = \ini_set('zend.exception_ignore_args', '0');
+        EventLog::$throwOn = $throwOn;
+        $h = OxPHPHarness::instance()->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/', $query))->pushRequest(FakeOxRequest::get('/', ['route' => 'two']));
+
+        try {
+            $this->log(fn () => $this->runner([YiiFixture::trackContainers()])->run());
+        } finally {
+            \ini_set('zend.exception_ignore_args', (string) $previous);
+        }
+
+        self::assertSame([0, 0], YiiFixture::$liveEarlierContainers);
     }
 
     public function test_a_streamed_body_is_flushed_per_chunk(): void
