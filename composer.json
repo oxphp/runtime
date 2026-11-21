@@ -1,9 +1,9 @@
 {
     "name": "oxphp/runtime",
-    "description": "OxPHP runtime adapter — run Symfony, Laravel and PSR-15 apps on the OxPHP server, in traditional and worker mode.",
+    "description": "OxPHP runtime adapter — run Symfony, Laravel, Yii 3 and PSR-15 apps on the OxPHP server, in traditional and worker mode.",
     "license": "MIT",
     "type": "library",
-    "keywords": ["oxphp", "runtime", "symfony-runtime", "psr-15", "laravel", "worker"],
+    "keywords": ["oxphp", "runtime", "symfony-runtime", "psr-15", "laravel", "yii", "worker"],
     "require": {
         "php": ">=8.4",
         "symfony/runtime": "^6.4 || ^7.0 || ^8.0"
@@ -20,7 +20,19 @@
         "symfony/http-kernel": "^6.4 || ^7.0 || ^8.0",
         "symfony/routing": "^6.4 || ^7.0 || ^8.0",
         "symfony/security-bundle": "^6.4 || ^7.0 || ^8.0",
-        "symfony/translation": "^6.4 || ^7.0 || ^8.0"
+        "symfony/translation": "^6.4 || ^7.0 || ^8.0",
+        "yiisoft/config": "^1.6",
+        "yiisoft/definitions": "^3.4",
+        "yiisoft/di": "^1.4",
+        "yiisoft/error-handler": "^4.3",
+        "yiisoft/injector": "^1.2",
+        "yiisoft/psr-emitter": "^1.0",
+        "yiisoft/router": "^4.0",
+        "yiisoft/router-fastroute": "^4.0",
+        "yiisoft/yii-event": "^2.2",
+        "yiisoft/yii-http": "^1.1",
+        "yiisoft/yii-runner": "^2.2",
+        "yiisoft/yii-runner-http": "^3.2"
     },
     "suggest": {
         "symfony/http-kernel":  "To run Symfony HttpKernel applications",
@@ -28,7 +40,13 @@
         "nyholm/psr7":          "Recommended PSR-17 factory for PSR-15 handlers",
         "guzzlehttp/psr7":      "Alternative PSR-17 factory",
         "httpsoft/http-message": "Alternative PSR-17 factory",
-        "laminas/laminas-diactoros": "Alternative PSR-17 factory"
+        "laminas/laminas-diactoros": "Alternative PSR-17 factory",
+        "yiisoft/yii-runner-http": "Required to run Yii 3 applications with OxPHP\\Runtime\\Yii\\OxPHPApplicationRunner: it brings yiisoft/yii-runner, yiisoft/error-handler, yiisoft/yii-http and psr/log, which it uses under OxPHP, and is the runner it falls back to outside the OxPHP SAPI"
+    },
+    "conflict": {
+        "yiisoft/di": "<1.4 || >=2.0",
+        "yiisoft/yii-runner": "<2.2 || >=3.0",
+        "yiisoft/yii-runner-http": "<3.2 || >=4.0"
     },
     "autoload": {
         "psr-4": { "OxPHP\\Runtime\\": "src/" }
@@ -43,7 +61,8 @@
     "config": {
         "sort-packages": true,
         "allow-plugins": {
-            "symfony/runtime": true
+            "symfony/runtime": true,
+            "yiisoft/config": false
         }
     }
 }

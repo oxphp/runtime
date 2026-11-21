@@ -33,20 +33,8 @@ final class Psr7ResponseRunner implements RunnerInterface
         $this->emitter->emit(
             $this->response->getStatusCode(),
             $this->response->getHeaders(),
-            $this->streamBody(),
+            Psr7Support::emittableBody($this->response->getBody()),
         );
         return 0;
-    }
-
-    /** @return \Generator<string> */
-    private function streamBody(): \Generator
-    {
-        $body = $this->response->getBody();
-        if ($body->isSeekable()) {
-            $body->rewind();
-        }
-        while (!$body->eof()) {
-            yield $body->read(8192);
-        }
     }
 }

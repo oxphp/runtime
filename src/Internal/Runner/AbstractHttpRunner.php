@@ -106,6 +106,9 @@ abstract class AbstractHttpRunner implements RunnerInterface
     private function emitFallback500(\Throwable $e): void
     {
         if (!\headers_sent()) {
+            // The failed response may have queued headers already, such as a Content-Length
+            // this body won't match or a Content-Disposition; none of them belong on the 500.
+            \header_remove();
             \http_response_code(500);
             \header('Content-Type: text/plain; charset=utf-8');
         }

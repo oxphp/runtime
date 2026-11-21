@@ -24,6 +24,7 @@ final class Psr15Runner extends AbstractHttpRunner
 {
     private readonly ResponseEmitter $emitter;
     private ?Psr17Factories $factories = null;
+    private ?string $serverSoftware = null;
 
     public function __construct(
         private readonly RequestHandlerInterface $handler,
@@ -46,24 +47,15 @@ final class Psr15Runner extends AbstractHttpRunner
         $this->emitter->emit(
             $response->getStatusCode(),
             $response->getHeaders(),
-            $this->streamBody($response->getBody()),
+            Psr7Support::emittableBody($response->getBody()),
         );
     }
 
     private function buildPsr7Request(OxRequest $ox, Psr17Factories $f): ServerRequestInterface
     {
-        $req = $f->serverRequest
-            ->createServerRequest($ox->method(), $ox->fullUri())
-            ->withProtocolVersion($ox->httpProtocolVersion())
-            ->withCookieParams($ox->cookies())
-            ->withQueryParams($ox->query() ?? [])
-            ->withUploadedFiles($this->convertFiles($_FILES ?? [], $f))
-            ->withBody($f->stream->createStream($ox->body()))
-            ->withAttribute('OXPHP_REQUEST_ID', \oxphp_request_id());
-
-        foreach ($ox->headers() as $name => $value) {
-            $req = $req->withHeader($name, $value);
-        }
+        $server = ServerParams::build($ox, $this->serverSoftware ??= $this->bridge->serverSoftware());
+        $req = Psr7Support::baseRequest($ox, $f->serverRequest, $f->stream, $server)
+            ->withUploadedFiles($this->convertFiles($_FILES ?? [], $f));
 
         $parsed = $ox->payload();
         if (\is_array($parsed) || \is_object($parsed)) {
@@ -129,16 +121,5 @@ final class Psr15Runner extends AbstractHttpRunner
             \is_string($name) ? $name : null,
             \is_string($type) ? $type : null,
         );
-    }
-
-    /** @return \Generator<string> */
-    private function streamBody(\Psr\Http\Message\StreamInterface $body): \Generator
-    {
-        if ($body->isSeekable()) {
-            $body->rewind();
-        }
-        while (!$body->eof()) {
-            yield $body->read(8192);
-        }
     }
 }

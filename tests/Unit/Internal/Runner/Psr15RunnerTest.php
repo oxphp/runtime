@@ -9,8 +9,11 @@ use OxPHP\Runtime\Internal\Bridge\OxPHP;
 use OxPHP\Runtime\Internal\Emitter\Psr17FactoryLocator;
 use OxPHP\Runtime\Internal\Runner\Psr15Runner;
 use OxPHP\Runtime\Tests\Stub\Apps\FakePsr15Handler;
+use OxPHP\Runtime\Tests\Stub\CapturedOxPHPServer;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
+use OxPHP\Runtime\Tests\Stub\MisreportedSizeStream;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
 use OxPHP\Runtime\Tests\Stub\UploadedFilesFixture;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -195,5 +198,106 @@ final class Psr15RunnerTest extends TestCase
         self::assertInstanceOf(UploadedFileInterface::class, $file);
 
         return [$file->getClientFilename(), $file->getClientMediaType(), $file->getSize(), $file->getError(), (string) $file->getStream()];
+    }
+
+    public function test_a_body_that_cannot_be_read_is_sent_empty_with_the_response_status(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/'));
+        $path = (string) \tempnam(\sys_get_temp_dir(), 'oxphp-runtime-test');
+        $f = new Psr17Factory();
+        $handler = new FakePsr15Handler(
+            static fn (): ResponseInterface => $f->createResponse(201)->withBody($f->createStreamFromFile($path, 'w')),
+        );
+
+        try {
+            new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        } finally {
+            \unlink($path);
+        }
+
+        self::assertSame([201], $h->capturedStatuses());
+        self::assertSame([''], $h->capturedOutputs());
+    }
+
+    public function test_a_body_of_known_size_is_sent_whole_and_one_of_unknown_size_is_flushed_per_chunk(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/known'))->pushRequest(FakeOxRequest::get('/unknown'));
+        $f = new Psr17Factory();
+        $flushes = [];
+        $handler = new FakePsr15Handler(static function (ServerRequestInterface $r) use ($f, $h, &$flushes): ResponseInterface {
+            $flushes[] = $h->flushCount();
+            $body = $f->createStream(\str_repeat('x', 20000));
+
+            return $f->createResponse()->withBody($r->getUri()->getPath() === '/known' ? $body : new UnknownSizeStream($body));
+        });
+
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        $flushes[] = $h->flushCount();
+
+        self::assertSame([20000, 20000], \array_map(\strlen(...), $h->capturedOutputs()));
+        // Flushes before each request and after the last: none for the known size, one per chunk for the unknown.
+        self::assertSame([0, 0, 3], $flushes);
+    }
+
+    public function test_a_piped_body_reporting_size_0_is_sent_whole_up_to_the_limit_and_flushed_per_chunk_past_it(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/small'))->pushRequest(FakeOxRequest::get('/large'));
+        $small = \str_repeat('s', 20000);
+        $large = \str_repeat('0123456789abcdef', 196608) . \str_repeat('L', 20000); // 3 MiB + 20000
+        $flushes = [];
+        $handler = new FakePsr15Handler(static function (ServerRequestInterface $r) use ($h, $small, $large, &$flushes): ResponseInterface {
+            $flushes[] = $h->flushCount();
+
+            return new Psr17Factory()->createResponse()->withBody(MisreportedSizeStream::pipe($r->getUri()->getPath() === '/small' ? $small : $large));
+        });
+
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        $flushes[] = $h->flushCount();
+
+        self::assertSame([\md5($small), \md5($large)], \array_map(\md5(...), $h->capturedOutputs()));
+        // None for the small body; past the limit, one for what was read ahead, then one per 8 KiB chunk.
+        self::assertSame([0, 0, 4], $flushes);
+    }
+
+    public function test_a_request_without_a_host_header_is_served_with_localhost_as_the_uri_host(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        // HTTP/1.0 lets a request leave out Host, as some load balancers' health checks do.
+        $h->pushRequest(CapturedOxPHPServer::http10WithoutHost()[0])->pushRequest(FakeOxRequest::get('/next'));
+        $f = new Psr17Factory();
+        $handler = new FakePsr15Handler(static fn (ServerRequestInterface $r): ResponseInterface => $f->createResponse()->withBody($f->createStream((string) $r->getUri())));
+
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+
+        self::assertSame([200, 200], $h->capturedStatuses());
+        self::assertSame(['http://localhost/server.php?a=1', 'http://localhost/next'], $h->capturedOutputs());
+    }
+
+    public function test_the_request_carries_the_server_params_oxphp_registers_except_what_the_request_api_has_no_source_for(): void
+    {
+        [$ox, $real] = CapturedOxPHPServer::post();
+        OxPHPHarness::instance()->setCurrentRequest($ox);
+        $handler = FakePsr15Handler::echoingPath();
+
+        \ob_start();
+
+        try {
+            new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        } finally {
+            \ob_end_clean();
+        }
+
+        $expected = ['SERVER_SOFTWARE' => 'OxPHP/0.0.0-test'] + \array_diff_key($real, \array_flip(CapturedOxPHPServer::NOT_FROM_THE_API));
+        \ksort($expected);
+        $server = $handler->received[0]->getServerParams();
+        \ksort($server);
+        self::assertSame($expected, $server);
     }
 }
