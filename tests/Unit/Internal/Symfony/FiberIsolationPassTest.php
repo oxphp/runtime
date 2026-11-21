@@ -13,7 +13,7 @@ use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestStack;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTokenStorage;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTranslator;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedUsageTrackingTokenStorage;
-use OxPHP\Runtime\Internal\Symfony\GuardedServicesResetter;
+use OxPHP\Runtime\Tests\Stub\InstalledServicesResetter;
 use OxPHP\Runtime\Tests\Stub\LocaleAwareConsumer;
 use OxPHP\Runtime\Tests\Stub\TranslatorConsumer;
 use PHPUnit\Framework\TestCase;
@@ -27,7 +27,6 @@ use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\HttpFoundation\RequestStack;
-use Symfony\Component\HttpKernel\DependencyInjection\ServicesResetter;
 use Symfony\Component\Routing\RequestContext;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\UsageTrackingTokenStorage;
@@ -81,7 +80,7 @@ final class FiberIsolationPassTest extends TestCase
         self::assertFalse($c->getDefinition('translator.default')->hasTag('kernel.locale_aware'));
 
         $resetter = $c->getDefinition('oxphp_runtime.services_resetter');
-        self::assertSame(GuardedServicesResetter::class, $resetter->getClass());
+        self::assertSame(InstalledServicesResetter::guard(), $resetter->getClass());
         self::assertSame(['.inner'], self::referenceIds($resetter->getArguments()));
         self::assertSame(['services_resetter', null, 0, ContainerInterface::IGNORE_ON_INVALID_REFERENCE], $resetter->getDecoratedService());
 
@@ -90,7 +89,7 @@ final class FiberIsolationPassTest extends TestCase
         self::assertInstanceOf(FiberScopedRequestStack::class, $c->get('request_stack'));
         self::assertInstanceOf(FiberScopedRequestContext::class, $c->get('router.request_context'));
         self::assertInstanceOf(FiberScopedTranslator::class, $c->get('translator.default'));
-        self::assertInstanceOf(GuardedServicesResetter::class, $c->get('services_resetter'));
+        self::assertInstanceOf(InstalledServicesResetter::guard(), $c->get('services_resetter'));
         self::assertInstanceOf(FiberScopedUsageTrackingTokenStorage::class, $c->get('security.token_storage'));
     }
 
@@ -98,7 +97,7 @@ final class FiberIsolationPassTest extends TestCase
     {
         $c = new ContainerBuilder();
         $c->register('request_stack', RequestStack::class)->setPublic(true);
-        $c->register('services_resetter', ServicesResetter::class)
+        $c->register('services_resetter', InstalledServicesResetter::stock())
             ->setArguments([new IteratorArgument([]), []])
             ->setPublic(true);
 
@@ -338,7 +337,7 @@ final class FiberIsolationPassTest extends TestCase
             ->addTag('kernel.event_listener', ['event' => 'kernel.response', 'method' => 'onKernelResponse']);
         $c->register('translator.default', Translator::class)->setArguments(['en'])->setPublic(true);
         $c->register('translation.locale_switcher', LocaleSwitcher::class)->setArguments(['en', []])->setPublic(true);
-        $c->register('services_resetter', ServicesResetter::class)
+        $c->register('services_resetter', InstalledServicesResetter::stock())
             ->setArguments([new IteratorArgument([]), []])
             ->setPublic(true);
 

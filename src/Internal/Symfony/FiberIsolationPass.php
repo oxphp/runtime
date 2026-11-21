@@ -9,8 +9,9 @@ use Symfony\Component\DependencyInjection\Compiler\CompilerPassInterface;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Reference;
+use Symfony\Component\DependencyInjection\ServicesResetterInterface;
 use Symfony\Component\HttpFoundation\RequestStack;
-use Symfony\Component\HttpKernel\DependencyInjection\ServicesResetterInterface;
+use Symfony\Component\HttpKernel\DependencyInjection\ServicesResetterInterface as LegacyServicesResetterInterface;
 use Symfony\Component\HttpKernel\KernelEvents;
 use Symfony\Component\Routing\RequestContext;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
@@ -33,6 +34,10 @@ use Symfony\Contracts\Translation\TranslatorInterface;
  * log, so the runner keeps its full teardown. Otherwise it installs every scoped
  * service and sets the marker to `true`. A missing service id is skipped: routing,
  * SecurityBundle and the translator are all optional.
+ *
+ * The `services_resetter` guard is `GuardedServicesResetter` on
+ * symfony/dependency-injection 8.1 or later, which moved `ServicesResetterInterface`
+ * there, and `LegacyGuardedServicesResetter` on symfony/http-kernel 7.3 to 8.0.
  *
  * It never fails the build, so `cache:warmup` keeps working after a Symfony upgrade.
  */
@@ -63,10 +68,15 @@ final class FiberIsolationPass implements CompilerPassInterface
 
     public function process(ContainerBuilder $container): void
     {
-        // Must stay first. `GuardedServicesResetter` implements this interface, and
-        // the checks below autoload and reflect the scoped classes: on http-kernel
-        // < 7.3 none of them may be touched.
-        if (!\interface_exists(ServicesResetterInterface::class)) {
+        // Must stay first. Each guard implements one of these interfaces, and the
+        // checks below autoload and reflect the scoped classes: on http-kernel < 7.3
+        // none of them may be touched. DependencyInjection's interface is checked
+        // first: from 8.1 autoloading HttpKernel's triggers a deprecation.
+        if (\interface_exists(ServicesResetterInterface::class)) {
+            $resetter = GuardedServicesResetter::class;
+        } elseif (\interface_exists(LegacyServicesResetterInterface::class)) {
+            $resetter = LegacyGuardedServicesResetter::class;
+        } else {
             $this->withhold($container, ['symfony/http-kernel 7.3 or later is required']);
 
             return;
@@ -89,7 +99,7 @@ final class FiberIsolationPass implements CompilerPassInterface
             return;
         }
 
-        self::install($container);
+        self::install($container, $resetter);
 
         $container->setParameter(self::MARKER, true);
         $container->setParameter(self::REASON, '');
@@ -257,7 +267,10 @@ final class FiberIsolationPass implements CompilerPassInterface
         return \is_string($class) ? $class : null;
     }
 
-    private static function install(ContainerBuilder $container): void
+    /**
+     * @param class-string<AbstractGuardedServicesResetter> $resetter
+     */
+    private static function install(ContainerBuilder $container, string $resetter): void
     {
         foreach (self::REPLACED as $id => [, $scoped]) {
             if ($container->hasDefinition($id)) {
@@ -277,9 +290,10 @@ final class FiberIsolationPass implements CompilerPassInterface
         }
 
         if ($container->has('services_resetter')) {
-            // HttpKernel's `ResettableServicePass` removes `services_resetter` later
-            // when nothing is tagged `kernel.reset`; the decorator then goes with it.
-            $container->register('oxphp_runtime.services_resetter', GuardedServicesResetter::class)
+            // `ResettableServicePass` (HttpKernel's, DependencyInjection's from 8.1)
+            // removes `services_resetter` later when nothing is tagged `kernel.reset`;
+            // the decorator then goes with it.
+            $container->register('oxphp_runtime.services_resetter', $resetter)
                 ->setArguments([new Reference('.inner')])
                 ->setDecoratedService('services_resetter', null, 0, ContainerInterface::IGNORE_ON_INVALID_REFERENCE);
         }
