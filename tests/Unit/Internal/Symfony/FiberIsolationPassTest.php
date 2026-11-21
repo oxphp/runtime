@@ -51,6 +51,10 @@ final class FiberIsolationPassTest extends TestCase
     protected function setUp(): void
     {
         RequestScopes::resetForTests();
+
+        if (Kernel::VERSION_ID < 70300 && $this->name() !== 'test_http_kernel_before_7_3_withholds_isolation_and_changes_nothing') {
+            self::markTestSkipped('Needs symfony/http-kernel 7.3 or later: before it the pass withholds isolation without any other check.');
+        }
     }
 
     protected function tearDown(): void
@@ -102,6 +106,24 @@ final class FiberIsolationPassTest extends TestCase
         self::assertInstanceOf(FiberScopedTranslator::class, $c->get('translator.default'));
         self::assertInstanceOf(InstalledServicesResetter::guard(), $c->get('services_resetter'));
         self::assertInstanceOf(FiberScopedUsageTrackingTokenStorage::class, $c->get('security.token_storage'));
+    }
+
+    public function test_http_kernel_before_7_3_withholds_isolation_and_changes_nothing(): void
+    {
+        if (Kernel::VERSION_ID >= 70300) {
+            self::markTestSkipped('Needs symfony/http-kernel before 7.3.');
+        }
+
+        $c = self::stockContainer();
+        $definitions = \serialize($c->getDefinitions());
+        $aliases = \serialize($c->getAliases());
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertFalse($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame('symfony/http-kernel 7.3 or later is required', $c->getParameter('oxphp_runtime.fiber_isolation_reason'));
+        self::assertSame($definitions, \serialize($c->getDefinitions()));
+        self::assertSame($aliases, \serialize($c->getAliases()));
     }
 
     public function test_absent_services_are_skipped(): void

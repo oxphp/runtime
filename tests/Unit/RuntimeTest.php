@@ -16,6 +16,7 @@ use OxPHP\Runtime\Tests\Stub\Apps\FakePsr15Handler;
 use OxPHP\Runtime\Tests\Stub\Apps\FakeSymfonyKernel;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use PHPUnit\Framework\Attributes\RequiresMethod;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 use Symfony\Component\HttpFoundation\Response;
@@ -52,6 +53,7 @@ final class RuntimeTest extends TestCase
         self::assertInstanceOf(Psr15Runner::class, $runner);
     }
 
+    #[RequiresMethod(\Illuminate\Contracts\Http\Kernel::class, 'handle')]
     public function test_dispatches_laravel_kernel_to_laravel_runner(): void
     {
         $runtime = new Runtime(self::NO_HANDLER);
@@ -125,9 +127,11 @@ final class RuntimeTest extends TestCase
     {
         // autoload_runtime.php writes APP_RUNTIME just before constructing us.
         $_SERVER['APP_RUNTIME'] = Runtime::class;
-        // project_dir makes SymfonyRuntime's constructor write APP_PROJECT_DIR,
-        // the same way its dotenv boot writes every .env variable.
-        $runtime = new Runtime(self::NO_HANDLER + ['project_dir' => '/srv/app']);
+        // The env option makes SymfonyRuntime's constructor write the env var
+        // into $_SERVER, the same way its dotenv boot writes every .env variable.
+        // (project_dir's APP_PROJECT_DIR would do too, but symfony/runtime 6.4
+        // doesn't write it; every supported version writes the env var.)
+        $runtime = new Runtime(self::NO_HANDLER + ['env' => 'boot-env', 'env_var_name' => 'OXPHP_TEST_BOOT_ENV']);
         // And the index.php callable runs after construction.
         $_SERVER['OXPHP_TEST_APP_VAR'] = 'from-callable';
 
@@ -141,14 +145,14 @@ final class RuntimeTest extends TestCase
         $app = new FakePsr15Handler(static function () use (&$seen): ResponseInterface {
             $seen[] = [
                 $_SERVER['APP_RUNTIME'] ?? null,
-                $_SERVER['APP_PROJECT_DIR'] ?? null,
+                $_SERVER['OXPHP_TEST_BOOT_ENV'] ?? null,
                 $_SERVER['OXPHP_TEST_APP_VAR'] ?? null,
             ];
             return new Psr17Factory()->createResponse(204);
         });
         $this->resolveRunner($runtime, $app)->run();
 
-        $expected = [Runtime::class, '/srv/app', 'from-callable'];
+        $expected = [Runtime::class, 'boot-env', 'from-callable'];
         self::assertSame([$expected, $expected], $seen);
     }
 

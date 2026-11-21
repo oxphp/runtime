@@ -7,6 +7,7 @@ namespace OxPHP\Runtime\Tests\Unit\Internal\Symfony;
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTranslator;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
+use PHPUnit\Framework\Attributes\RequiresMethod;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpKernel\CacheWarmer\WarmableInterface;
 use Symfony\Component\Translation\DataCollectorTranslator;
@@ -237,6 +238,7 @@ final class FiberScopedTranslatorTest extends TestCase
         self::assertSame('en', $translator->getLocale());
     }
 
+    #[RequiresMethod(Translator::class, 'addGlobalParameter')]
     public function test_it_forwards_fallback_locales_and_global_parameters_to_the_inner(): void
     {
         $inner = self::inner();
@@ -258,6 +260,7 @@ final class FiberScopedTranslatorTest extends TestCase
         self::assertSame(['ru'], $inner->getFallbackLocales());
     }
 
+    #[RequiresMethod(Translator::class, 'addGlobalParameter')]
     public function test_the_data_collector_translator_still_sees_the_inners_fallback_locales_and_global_parameters(): void
     {
         $inner = self::inner();

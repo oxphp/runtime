@@ -18,6 +18,7 @@ use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpKernel\Kernel;
 use Symfony\Contracts\Service\ResetInterface;
 
 /**
@@ -30,6 +31,12 @@ use Symfony\Contracts\Service\ResetInterface;
  */
 final class FiberIsolationKernelTest extends TestCase
 {
+    /** Tests that hold on every supported http-kernel, isolation installed or not. */
+    private const array ON_EVERY_HTTP_KERNEL = [
+        'test_isolation_is_withheld_before_http_kernel_7_3',
+        'test_outside_worker_mode_everything_behaves_stock',
+    ];
+
     private string $varDir = '';
 
     private ?TestKernel $kernel = null;
@@ -58,6 +65,11 @@ final class FiberIsolationKernelTest extends TestCase
 
         $this->varDir = \sys_get_temp_dir() . '/oxphp-runtime-kernel-' . \bin2hex(\random_bytes(8));
         new Filesystem()->mkdir($this->varDir . '/log');
+
+        // Last: tearDown() runs after a skip too and puts back what is saved above.
+        if (Kernel::VERSION_ID < 70300 && !\in_array($this->name(), self::ON_EVERY_HTTP_KERNEL, true)) {
+            self::markTestSkipped('Needs symfony/http-kernel 7.3 or later: OxPHPBundle withholds isolation before it.');
+        }
     }
 
     protected function tearDown(): void
@@ -102,6 +114,18 @@ final class FiberIsolationKernelTest extends TestCase
 
         self::assertTrue($container->getParameter('oxphp_runtime.fiber_isolation'));
         self::assertSame('', $container->getParameter('oxphp_runtime.fiber_isolation_reason'));
+    }
+
+    public function test_isolation_is_withheld_before_http_kernel_7_3(): void
+    {
+        if (Kernel::VERSION_ID >= 70300) {
+            self::markTestSkipped('Needs symfony/http-kernel before 7.3.');
+        }
+
+        $container = $this->bootKernel()->getContainer();
+
+        self::assertFalse($container->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame('symfony/http-kernel 7.3 or later is required', $container->getParameter('oxphp_runtime.fiber_isolation_reason'));
     }
 
     public function test_main_request_is_each_requests_own_while_a_stream_is_open(): void

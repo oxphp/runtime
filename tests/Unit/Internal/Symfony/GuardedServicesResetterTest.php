@@ -118,12 +118,18 @@ final class GuardedServicesResetterTest extends TestCase
             }
         };
 
+        // Outside the try: PHPUnit's skip on http-kernel < 7.3 is a \RuntimeException too.
+        $guarded = self::guarded($inner);
+
         try {
-            self::guarded($inner)->reset();
-            self::fail('The inner exception must propagate.');
+            $guarded->reset();
         } catch (\RuntimeException $caught) {
             self::assertSame($failure, $caught);
+
+            return;
         }
+
+        self::fail('The inner exception must propagate.');
     }
 
     /**
