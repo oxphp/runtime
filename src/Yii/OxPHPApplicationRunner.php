@@ -213,7 +213,7 @@ final class OxPHPApplicationRunner extends ApplicationRunner
         // As in `HttpApplicationRunner::runInternal()`: shutdown() runs even when start() throws.
         try {
             $application->start();
-            new YiiRunner(new OxPHP(), $blueprint, $bootstrapList, $this->emitter)->run();
+            new YiiRunner(new OxPHP(), $blueprint, $bootstrapList, $this->emitter, $this->debug)->run();
         } finally {
             $application->shutdown();
         }

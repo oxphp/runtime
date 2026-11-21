@@ -16,6 +16,7 @@ use OxPHP\Runtime\Tests\Stub\Yii\RecordingEmitter;
 use OxPHP\Runtime\Tests\Stub\Yii\SharedProbe;
 use OxPHP\Runtime\Tests\Stub\Yii\YiiFixture;
 use OxPHP\Runtime\Yii\OxPHPApplicationRunner;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Psr\Log\NullLogger;
@@ -23,6 +24,10 @@ use Yiisoft\Config\ConfigInterface;
 use Yiisoft\Di\Container;
 use Yiisoft\ErrorHandler\ErrorHandler;
 use Yiisoft\ErrorHandler\Renderer\PlainTextRenderer;
+use Yiisoft\ErrorHandler\RendererProvider\CompositeRendererProvider;
+use Yiisoft\ErrorHandler\RendererProvider\RendererProviderInterface;
+use Yiisoft\ErrorHandler\ThrowableResponseFactory;
+use Yiisoft\ErrorHandler\ThrowableResponseFactoryInterface;
 use Yiisoft\Router\CurrentRoute;
 use Yiisoft\Yii\Event\InvalidEventConfigurationFormatException;
 
@@ -88,6 +93,39 @@ final class OxPHPApplicationRunnerTest extends TestCase
         ), $e->getMessage());
         self::assertSame([], OxPHPHarness::instance()->capturedOutputs());
         self::assertNotContains('ApplicationStartup', EventLog::$events);
+    }
+
+    /**
+     * @return iterable<string, array{bool, list<string>, string}>
+     */
+    public static function provideError_pages_are_verbose_in_every_request_exactly_when_debug_is_onCases(): iterable
+    {
+        yield 'debug' => [true, [], 'RuntimeException with message "%s"'];
+        yield 'debug, ErrorHandler shared' => [true, [ErrorHandler::class], 'RuntimeException with message "%s"'];
+        yield 'no debug' => [false, [], 'An internal server error occurred.'];
+    }
+
+    /**
+     * @param list<string> $sharedServices
+     */
+    #[DataProvider('provideError_pages_are_verbose_in_every_request_exactly_when_debug_is_onCases')]
+    public function test_error_pages_are_verbose_in_every_request_exactly_when_debug_is_on(bool $debug, array $sharedServices, string $expected): void
+    {
+        $h = OxPHPHarness::instance()->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/', ['throw' => 'one']))->pushRequest(FakeOxRequest::get('/', ['throw' => 'two']));
+        // ErrorCatcher renders through the request container's ErrorHandler, as in yiisoft/app.
+        $config = YiiFixture::config(di: [
+            ThrowableResponseFactoryInterface::class => ThrowableResponseFactory::class,
+            RendererProviderInterface::class => static fn (): RendererProviderInterface => new CompositeRendererProvider(),
+        ]);
+
+        $this->underOxPHP($this->runner(config: $config, debug: $debug, sharedServices: $sharedServices));
+
+        self::assertSame([500, 500], $h->capturedStatuses());
+        foreach (['one', 'two'] as $i => $message) {
+            self::assertStringStartsWith(\sprintf($expected, $message), $h->capturedOutputs()[$i]);
+            self::assertSame($debug, \str_contains($h->capturedOutputs()[$i], 'Stack trace:'));
+        }
     }
 
     public function test_check_events_runs_once_at_boot_against_the_boot_container(): void

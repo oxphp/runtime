@@ -14,6 +14,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\UploadedFileFactoryInterface;
+use Yiisoft\ErrorHandler\ErrorHandler;
 use Yiisoft\ErrorHandler\Middleware\ErrorCatcher;
 use Yiisoft\PsrEmitter\EmitterInterface;
 use Yiisoft\Yii\Http\Application;
@@ -44,12 +45,14 @@ final class YiiRunner extends AbstractHttpRunner
     /**
      * @param list<callable> $bootstrapList the bootstrap group's callbacks, run against each request container
      * @param EmitterInterface|null $emitter sends the response instead of the OxPHP emitter
+     * @param bool $debug whether each request container's `ErrorHandler` renders verbosely
      */
     public function __construct(
         OxPHP $bridge,
         private readonly ContainerBlueprint $blueprint,
         private readonly array $bootstrapList,
         private readonly ?EmitterInterface $emitter = null,
+        private readonly bool $debug = false,
     ) {
         // A request container is never reused, so there is no state to reset; yiisoft/app
         // reads its environment from $_ENV/getenv() at boot, so no $_SERVER carry-over either.
@@ -61,6 +64,12 @@ final class YiiRunner extends AbstractHttpRunner
     {
         try {
             $container = $this->blueprint->createRequestContainer();
+
+            // As `HttpApplicationRunner` does to its one container's handler: `ErrorCatcher`
+            // renders through this container's own `ErrorHandler`, not the boot container's.
+            if ($this->debug) {
+                $container->get(ErrorHandler::class)->debug();
+            }
 
             if ($this->bootstrapList !== []) {
                 new BootstrapRunner($container, $this->bootstrapList)->run();
