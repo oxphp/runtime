@@ -112,8 +112,8 @@ stream read (`RUNTIME_HOOKS`), or in an open SSE stream — lets another
 request run and finish on the same worker. Symfony keeps its per-request
 state in services shared by the whole worker, so overlapping requests
 corrupt each other: `app.request` is `null` in a template, a page renders
-in another request's language, a request reads another request's security
-token.
+in another request's language, a request reads the security token another
+request put in token storage.
 
 `OxPHPBundle` gives each request its own copy of that state. It is opt-in;
 without it, behaviour is unchanged apart from a log hint (see below). Add one
@@ -143,14 +143,29 @@ its state carries over to the next request:
 
 - implement `Symfony\Contracts\Service\ResetInterface` (autoconfigured as
   `kernel.reset`);
-- be tagged `kernel.reset`;
+- be tagged `kernel.reset` with the `method` to call (Symfony rejects the tag
+  without one);
 - be reset by one of your own [resetters](#resetters).
+
+```yaml
+# config/services.yaml
+services:
+    App\Cart\CurrentCart:
+        tags: [{ name: kernel.reset, method: clear }]
+```
 
 Shared `kernel.reset` services are reset only once the worker is idle:
 Symfony calls the resetter when a request starts, and the runtime skips that
 call while another request is in flight. Under continuous overlap (an SSE
 stream that never closes) they are not reset until a request starts on an
 idle worker.
+
+A request that ends without running its `finally` blocks (a fatal error, a
+time limit, `exit()`, a server shutdown or worker recycle, or a client gone
+mid-stream, see [Streaming](#streaming)) is still closed at its end by a
+shutdown function the runtime registers. From then on the runtime itself
+resets the `kernel.reset` services at the end of every request on an idle
+worker, because Symfony stops doing so after such a request.
 
 ### What is isolated
 
@@ -159,7 +174,7 @@ Each request sees only its own:
 - request stack (`getMainRequest()`, `getCurrentRequest()`, `app.request`);
 - router context used to generate URLs (base URL, host, scheme, `_locale`);
 - translator locale and locale switcher locale;
-- security token;
+- security token in token storage (`security.token_storage`);
 - session usage tracking, so a stateless request overlapping a logged-in one
   doesn't mark its session as used;
 - current firewall behind `logout_path()` and `logout_url()`.
@@ -174,6 +189,12 @@ finishes first.
 - `slugger` and every other `kernel.locale_aware` service besides the
   translator and the locale switcher.
 - Your own services and singletons.
+- The authorization checker's own stacks, shared as in stock Symfony. While
+  a check inside `isGrantedForUser()` waits (a voter in a hooked database or
+  HTTP call), another request's `isGranted()` is decided for that user rather
+  than for its own token; and while any check waits, other requests' checks
+  record their votes and decision reasons into the waiting check's access
+  decision. Isolating them is a planned follow-up.
 - User resetters: they still run after every request, even while other
   requests are in flight, so one that clears shared state (for example
   `EntityManager::clear()`) clears it under requests that are still running.
@@ -252,6 +273,29 @@ are flushed per chunk via `oxphp_stream_flush()`. An exception thrown
 mid-stream closes the runtime's output buffers cleanly (bytes already
 streamed stay sent, partial buffers are discarded) and never poisons the
 worker.
+
+When a client disconnects mid-stream, OxPHP by default stops the request
+inside the write that finds it gone, and every `finally` the callback was in
+is skipped. A long stream (SSE) that has to clean up calls
+`ignore_user_abort(true)`: the write then returns and `connection_aborted()`
+reports the disconnect. The loop must end on that check, since nothing else
+stops the request any more:
+
+```php
+return new StreamedResponse(function (): void {
+    \set_time_limit(0);
+    \ignore_user_abort(true);
+
+    try {
+        while (!\connection_aborted()) {
+            echo 'data: ', \json_encode(['ts' => \time()]), "\n\n";
+            \oxphp_sleep(1.0);
+        }
+    } finally {
+        // runs on a disconnect too
+    }
+}, 200, ['Content-Type' => 'text/event-stream']);
+```
 
 For "respond early, keep working" patterns use `oxphp_finish_request()`
 directly in your controller:
