@@ -17,9 +17,11 @@ use Psr\Http\Message\UploadedFileFactoryInterface;
 use Yiisoft\ErrorHandler\ErrorHandler;
 use Yiisoft\ErrorHandler\Middleware\ErrorCatcher;
 use Yiisoft\PsrEmitter\EmitterInterface;
+use Yiisoft\PsrEmitter\HeadersHaveBeenSentException as EmitterHeadersHaveBeenSentException;
 use Yiisoft\Yii\Http\Application;
 use Yiisoft\Yii\Http\Handler\ThrowableHandler;
 use Yiisoft\Yii\Runner\BootstrapRunner;
+use Yiisoft\Yii\Runner\Http\Exception\HeadersHaveBeenSentException;
 
 /**
  * @internal Serves every request of a Yii application from a container of its own.
@@ -122,7 +124,12 @@ final class YiiRunner extends AbstractHttpRunner
     private function emit(ResponseInterface $response): void
     {
         if ($this->emitter !== null) {
-            $this->emitter->emit($response);
+            try {
+                $this->emitter->emit($response);
+            } catch (EmitterHeadersHaveBeenSentException) {
+                // As `HttpApplicationRunner::emit()` converts it.
+                throw new HeadersHaveBeenSentException();
+            }
 
             return;
         }

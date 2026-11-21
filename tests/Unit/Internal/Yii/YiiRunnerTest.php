@@ -19,9 +19,12 @@ use OxPHP\Runtime\Tests\Stub\Yii\SharedProbe;
 use OxPHP\Runtime\Tests\Stub\Yii\YiiFixture;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\PsrEmitter\EmitterInterface;
+use Yiisoft\PsrEmitter\HeadersHaveBeenSentException as EmitterHeadersHaveBeenSentException;
 use Yiisoft\Yii\Http\Application;
+use Yiisoft\Yii\Runner\Http\Exception\HeadersHaveBeenSentException;
 
 final class YiiRunnerTest extends TestCase
 {
@@ -271,6 +274,23 @@ final class YiiRunnerTest extends TestCase
 
         self::assertSame([200], $h->capturedStatuses());
         self::assertSame([''], $h->capturedOutputs());
+    }
+
+    public function test_a_given_emitter_finding_the_headers_sent_fails_with_the_runner_exception_as_in_http_application_runner(): void
+    {
+        $h = OxPHPHarness::instance()->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/', ['route' => 'ok']))->pushRequest(FakeOxRequest::get('/', ['route' => 'ok']));
+        $emitter = new class () implements EmitterInterface {
+            public function emit(ResponseInterface $response): void
+            {
+                throw new EmitterHeadersHaveBeenSentException();
+            }
+        };
+
+        $log = $this->log(fn () => $this->runner(emitter: $emitter)->run());
+
+        self::assertSame(2, \substr_count($log, 'OxPHP runtime unhandled exception: ' . HeadersHaveBeenSentException::class . ' in '));
+        self::assertStringNotContainsString(EmitterHeadersHaveBeenSentException::class, $log);
     }
 
     public function test_a_given_emitter_is_used_instead_of_the_response_emitter(): void
