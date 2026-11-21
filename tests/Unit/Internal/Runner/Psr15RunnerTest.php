@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
 
+use Nyholm\Psr7\Factory\Psr17Factory;
 use OxPHP\Runtime\Internal\Bridge\OxPHP;
 use OxPHP\Runtime\Internal\Emitter\Psr17FactoryLocator;
 use OxPHP\Runtime\Internal\Runner\Psr15Runner;
@@ -11,6 +12,8 @@ use OxPHP\Runtime\Tests\Stub\Apps\FakePsr15Handler;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
 
 final class Psr15RunnerTest extends TestCase
 {
@@ -60,6 +63,24 @@ final class Psr15RunnerTest extends TestCase
 
         self::assertSame(['psr15:/a', 'psr15:/b'], $h->capturedOutputs());
         self::assertSame(2, $resets);
+    }
+
+    public function test_worker_passes_each_response_status_to_the_sapi(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        foreach (['/404', '/302', '/418', '/200'] as $path) {
+            $h->pushRequest(FakeOxRequest::get($path));
+        }
+
+        $f = new Psr17Factory();
+        $handler = new FakePsr15Handler(
+            static fn (ServerRequestInterface $r): ResponseInterface => $f->createResponse((int) \substr($r->getUri()->getPath(), 1)),
+        );
+
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+
+        self::assertSame([404, 302, 418, 200], $h->capturedStatuses());
     }
 
     public function test_parsed_body_passed_when_form_post(): void

@@ -21,6 +21,8 @@ final class OxPHPHarness
     private int $workerId = 0;
     /** @var list<string> */
     private array $outputs = [];
+    /** @var list<int> */
+    private array $statuses = [];
     private int $resetCount = 0;
 
     public static function instance(): self
@@ -133,8 +135,21 @@ final class OxPHPHarness
         return $this->outputs;
     }
 
+    /**
+     * @return list<int> per-request HTTP status, read the way the OxPHP server
+     *         reads it at request completion (SG(sapi_headers).http_response_code)
+     */
+    public function capturedStatuses(): array
+    {
+        return $this->statuses;
+    }
+
     public function driveWorker(callable $handler): bool
     {
+        // Each request starts at 200, as after the server's soft reset — a
+        // status left over from earlier code must not leak into the first one.
+        \http_response_code(200);
+
         foreach ($this->queue as $req) {
             $this->current = $req;
             \ob_start();
@@ -142,6 +157,7 @@ final class OxPHPHarness
                 $handler();
             } finally {
                 $this->outputs[] = (string) \ob_get_clean();
+                $this->statuses[] = (int) \http_response_code();
                 // Simulate server-side soft reset: fresh status for the next
                 // iteration so leftover 4xx/5xx codes don't leak.
                 \http_response_code(200);
