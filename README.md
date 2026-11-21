@@ -163,9 +163,11 @@ idle worker.
 A request that ends without running its `finally` blocks (a fatal error, a
 time limit, `exit()`, a server shutdown or worker recycle, or a client gone
 mid-stream, see [Streaming](#streaming)) is still closed at its end by a
-shutdown function the runtime registers. From then on the runtime itself
-resets the `kernel.reset` services at the end of every request on an idle
-worker, because Symfony stops doing so after such a request.
+shutdown function the runtime registers. If it ended inside the kernel
+(not in its streamed body), Symfony stops resetting services for the rest of
+the worker's life, so from then on the runtime resets the `kernel.reset`
+services itself at the end of every request on an idle worker. Either way,
+each request is reset once.
 
 ### What is isolated
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Internal\Reset;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Symfony\AbstractGuardedServicesResetter;
 use OxPHP\Runtime\Resetter\ResetterInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpKernel\Kernel;
@@ -29,8 +30,12 @@ use Symfony\Contracts\Service\ResetInterface;
  * without its `finally` inside `Kernel::handle()` left Symfony's request depth
  * raised, and `Kernel::boot()` then never calls `services_resetter` again on this
  * worker. So from the first bailout on, with the marker `true`, each request that
- * ends with no other in flight calls the container's `services_resetter` itself.
- * A bailout is not logged: a client leaving mid-stream is one, and is normal.
+ * ends with no other in flight and in which Symfony never reached the guard
+ * (`AbstractGuardedServicesResetter::reachedInCurrentRequest()`) calls the
+ * container's `services_resetter` itself. A request that bailed out elsewhere (in
+ * its streamed body, once `handle()` returned) leaves Symfony resetting, and then
+ * each request is still reset once. A bailout is not logged: a client leaving
+ * mid-stream is one, and is normal.
  *
  * Without isolation, the first time a request ends while another is still in
  * flight, a hint goes to `error_log()` saying why and what to do. Each hint is
@@ -73,7 +78,11 @@ final class SymfonyContainerResetter implements ResetterInterface
 
         if ($hasMarker && $container->getParameter(self::MARKER) === true) {
             if (!RequestScopes::isDegraded()) {
-                if (RequestScopes::hasBailedOut() && RequestScopes::inFlight() <= 1) {
+                if (
+                    RequestScopes::hasBailedOut()
+                    && RequestScopes::inFlight() <= 1
+                    && !AbstractGuardedServicesResetter::reachedInCurrentRequest()
+                ) {
                     $this->resetServices($container);
                 }
 

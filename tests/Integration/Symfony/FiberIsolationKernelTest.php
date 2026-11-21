@@ -267,6 +267,33 @@ final class FiberIsolationKernelTest extends TestCase
         self::assertTrue(RequestScopes::hasBailedOut());
     }
 
+    public function test_kernel_reset_runs_once_per_request_after_a_bailout_outside_the_kernel(): void
+    {
+        // A client gone mid-stream ends the request while its body streams, after
+        // Kernel::handle() returned: Symfony's request depth is back to zero and
+        // Kernel::boot() goes on resetting services, so the runtime must not too.
+        $kernel = $this->bootKernel();
+        $counter = $kernel->getContainer()->get(ResetCounter::class);
+        self::assertInstanceOf(ResetCounter::class, $counter);
+
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true)->setBailoutMode(true);
+        $harness->pushRequest(FakeOxRequest::get('/stream', ['suspend' => '1']));
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+
+        $resetsSeen = [];
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [
+            static function () use ($counter, &$resetsSeen): void {
+                $resetsSeen[] = $counter->resets;
+            },
+        ])->run();
+
+        self::assertSame(1, $harness->bailouts(), 'The first request bailed out in its streamed body.');
+        self::assertTrue(RequestScopes::hasBailedOut());
+        self::assertSame([1, 2], $resetsSeen, 'One reset per request, at its start.');
+    }
+
     public function test_overlapping_requests_through_the_runner_keep_the_container(): void
     {
         // With isolation installed, a request that ends while another is in

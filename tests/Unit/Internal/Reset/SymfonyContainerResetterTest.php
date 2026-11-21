@@ -7,6 +7,7 @@ namespace OxPHP\Runtime\Tests\Unit\Internal\Reset;
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
 use OxPHP\Runtime\Internal\Fiber\Ticket;
 use OxPHP\Runtime\Internal\Reset\SymfonyContainerResetter;
+use OxPHP\Runtime\Tests\Stub\InstalledServicesResetter;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -126,6 +127,28 @@ final class SymfonyContainerResetterTest extends TestCase
         self::assertSame(1, $servicesResetter->resets);
         self::assertSame(0, $container->calls, 'No teardown: isolation is still installed.');
         self::assertSame('', $this->loggedOutput(), 'A client leaving mid-stream is normal; nothing to log.');
+    }
+
+    public function test_after_a_bailout_a_request_symfony_reset_at_its_start_is_not_reset_again(): void
+    {
+        // The request bailed out outside Kernel::handle() (in its streamed body),
+        // so Kernel::boot() still calls the guard at every request start.
+        self::markBailedOut();
+
+        $inner = self::countingResetter();
+        $guard = InstalledServicesResetter::guard();
+        $guarded = new $guard($inner);
+        $container = $this->createContainer(['oxphp_runtime.fiber_isolation' => true], ['services_resetter' => $guarded]);
+        $resetter = new SymfonyContainerResetter($this->createKernelReturning($container));
+
+        $request = RequestFiber::start(static function () use ($guarded, $resetter): void {
+            $guarded->reset(); // Kernel::boot()
+            $resetter->reset(); // the end of the request
+        });
+
+        self::assertTrue($request->isTerminated());
+        self::assertSame(1, $inner->resets);
+        self::assertSame(0, $container->calls);
     }
 
     public function test_after_a_bailout_an_overlapped_request_leaves_the_services_alone(): void

@@ -106,6 +106,30 @@ final class GuardedServicesResetterTest extends TestCase
         self::assertSame(1, $inner->count, 'The reset must run once the worker is idle again.');
     }
 
+    public function test_it_records_that_a_request_reached_it_whether_it_reset_or_skipped(): void
+    {
+        $guarded = self::guarded(self::countingResetter());
+
+        $a = RequestFiber::start(static function () use ($guarded): array {
+            $before = AbstractGuardedServicesResetter::reachedInCurrentRequest();
+            \Fiber::suspend();
+            $guarded->reset(); // the only request left: resets
+
+            return [$before, AbstractGuardedServicesResetter::reachedInCurrentRequest()];
+        });
+        $b = RequestFiber::start(static function () use ($guarded): bool {
+            $guarded->reset(); // A in flight: skips
+
+            return AbstractGuardedServicesResetter::reachedInCurrentRequest();
+        });
+        $c = RequestFiber::start(static fn (): bool => AbstractGuardedServicesResetter::reachedInCurrentRequest());
+        $a->resume();
+
+        self::assertSame([false, true], $a->result());
+        self::assertTrue($b->result());
+        self::assertFalse($c->result(), 'Another request reaching it says nothing about this one.');
+    }
+
     public function test_an_inner_failure_propagates_unchanged(): void
     {
         $failure = new \RuntimeException('inner reset failed');
