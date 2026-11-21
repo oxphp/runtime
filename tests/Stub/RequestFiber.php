@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Stub;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Fiber\Ticket;
 
 /**
  * Plays the part of an OxPHP request fiber: opens a request scope on entry and
@@ -17,7 +18,8 @@ final class RequestFiber
     public static function start(\Closure $body): self
     {
         $fiber = new \Fiber(static function () use ($body): mixed {
-            $ticket = RequestScopes::enterRequest();
+            $ticket = new Ticket();
+            RequestScopes::enterRequest($ticket);
 
             try {
                 return $body();

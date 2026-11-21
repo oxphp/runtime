@@ -17,10 +17,26 @@ namespace OxPHP\Runtime\Internal\Fiber;
  *     behaviour.
  *  2. Worker mode and no running fiber (worker boot code, destructors that run
  *     between requests): the shared scope.
- *  3. A fiber registered by `enterRequest()`: that request's scope.
- *  4. Any other fiber (one the app created inside a request): a private, empty
- *     scope created on first use and held in a `\WeakMap` keyed by that fiber.
- *     This fails closed: such a fiber never sees another request's state.
+ *  3. A fiber a request was entered on: that request's scope, also after the
+ *     request closed, until the fiber's next request replaces it. Whatever runs
+ *     on the fiber in between is that request's own: its shutdown functions
+ *     (OxPHP runs them on the request's fiber, also after a fatal error) and the
+ *     destructors of what it leaves.
+ *  4. Any other fiber that a request fiber is running, directly or through other
+ *     fibers (one the app created, a scheduler's, the one PHP's garbage collector
+ *     runs destructors in): a private scope of that fiber under that request,
+ *     empty at first. Such a fiber can outlive the request and be resumed by
+ *     another; it then gets another private scope under that one. This fails
+ *     closed: it never sees a request's own state, nor what it kept while it ran
+ *     for another request.
+ *  5. Any other fiber with no request fiber running it: the shared scope, as in
+ *     rule 2, since no request is running.
+ *
+ * Rule 4 finds the request by `\Fiber::isRunning()`, which is also true of a
+ * fiber that resumed the caller and has not been suspended since. OxPHP runs one
+ * request fiber at a time on a worker and never resumes one from another, so at
+ * most one request fiber is running. It scans the fibers requests were entered
+ * on, so it costs one call per such fiber, and only for rule 4's callers.
  *
  * `enterRequest()` always maps the current fiber to a new scope and replaces
  * any existing mapping, because OxPHP reuses `\Fiber` objects across requests:
@@ -32,25 +48,30 @@ namespace OxPHP\Runtime\Internal\Fiber;
  * itself degraded for the rest of the worker's life so callers can fall back to
  * stock behaviour.
  *
- * `enterRequest()` returns a `Ticket`, and `leaveRequest()` closes the request
- * through it, at most once. The runner closes it twice over: in the iteration's
- * `finally`, and in a shutdown function registered right after the enter. OxPHP
- * skips every `finally` of a request that ends in a fatal error, a time limit,
- * `exit()`, a cancel or a client gone mid-stream, but still runs the request's
- * shutdown functions. A ticket still open when its shutdown function runs is such
- * a request, and the registry marks itself bailed out for the rest of the
- * worker's life (`hasBailedOut()`), since whatever the request was in the middle
- * of was never unwound either.
+ * A request counts as in flight from `enterRequest()` until its first
+ * `leaveRequest()`, at most once. The runner closes it twice over: in the
+ * iteration's `finally`, and in a shutdown function it registered before the
+ * enter. OxPHP skips every `finally` of a request that ends in a fatal error, a
+ * time limit, `exit()`, a cancel or a client gone mid-stream, but still runs the
+ * request's shutdown functions. A ticket still open when its shutdown function
+ * runs is such a request, and the registry marks itself bailed out for the rest
+ * of the worker's life (`hasBailedOut()`), since whatever the request was in the
+ * middle of was never unwound either.
  */
 final class RequestScopes
 {
     private static ?RequestScope $shared = null;
 
-    /** @var \WeakMap<\Fiber, RequestScope>|null Scopes of fibers registered by enterRequest() */
+    /** @var \WeakMap<\Fiber, RequestScope>|null Scope of the latest request entered on each fiber */
     private static ?\WeakMap $requestFibers = null;
 
-    /** @var \WeakMap<\Fiber, RequestScope>|null Private scopes of fibers the app created */
-    private static ?\WeakMap $userFibers = null;
+    /**
+     * The requests in flight. Weak, so a ticket nobody can close any more is not
+     * counted either.
+     *
+     * @var \WeakMap<Ticket, true>|null
+     */
+    private static ?\WeakMap $open = null;
 
     private static bool $inWorker = false;
 
@@ -58,39 +79,37 @@ final class RequestScopes
 
     private static bool $bailedOut = false;
 
-    private static int $inFlight = 0;
-
     /**
-     * Opens a request, with a new scope for the current fiber. Call it at the
-     * top of a worker iteration and keep the ticket to close the request with.
+     * Opens `$ticket`'s request, with a new scope for the current fiber. Call it
+     * at the top of a worker iteration, after registering the request's shutdown
+     * close with the same ticket. A ticket is entered once.
      */
-    public static function enterRequest(): Ticket
+    public static function enterRequest(Ticket $ticket): void
     {
-        self::$inWorker = true;
-        ++self::$inFlight;
-
         $fiber = \Fiber::getCurrent();
+        $scope = $fiber === null ? null : new RequestScope();
+        self::$open ??= new \WeakMap();
+        self::$requestFibers ??= new \WeakMap();
+
+        // No calls from here on: a time limit or a cancel lands at a call, and the
+        // request must be counted exactly when its ticket is open.
+        self::$inWorker = true;
 
         if ($fiber === null) {
             self::$degraded = true;
-
-            return new Ticket(null, null);
+        } else {
+            self::$requestFibers[$fiber] = $scope;
         }
 
-        $scope = new RequestScope();
-
-        self::$requestFibers ??= new \WeakMap();
-        self::$requestFibers[$fiber] = $scope;
-
-        return new Ticket($fiber, $scope);
+        self::$open[$ticket] = true;
     }
 
     /**
-     * Closes the ticket's request. Only the first call for a ticket counts, so
-     * the iteration's `finally` and its shutdown function can both call it.
+     * Closes the ticket's request. Only the first call for an entered ticket
+     * counts, so the iteration's `finally` and its shutdown function can both
+     * call it, and one for a ticket never entered does nothing.
      *
-     * The fiber is unmapped only while it still maps to this ticket's scope: a
-     * recycled fiber that already entered its next request keeps that one's.
+     * The fiber keeps the request's scope (see rule 3).
      *
      * Pass `$atShutdown` from the request's shutdown function: a ticket still
      * open then belongs to a request that skipped its `finally`, which marks the
@@ -98,24 +117,14 @@ final class RequestScopes
      */
     public static function leaveRequest(Ticket $ticket, bool $atShutdown = false): void
     {
-        $fiber = $ticket->fiber();
-        $scope = $ticket->scope();
-
-        if (!$ticket->close()) {
+        if (self::$open === null || !self::$open->offsetExists($ticket)) {
             return;
         }
 
-        --self::$inFlight;
+        self::$open->offsetUnset($ticket);
 
         if ($atShutdown) {
             self::$bailedOut = true;
-        }
-
-        if ($fiber !== null
-            && self::$requestFibers !== null
-            && self::$requestFibers->offsetExists($fiber)
-            && self::$requestFibers[$fiber] === $scope) {
-            self::$requestFibers->offsetUnset($fiber);
         }
     }
 
@@ -131,26 +140,32 @@ final class RequestScopes
             return self::shared();
         }
 
-        if (self::$requestFibers !== null && self::$requestFibers->offsetExists($fiber)) {
-            return self::$requestFibers[$fiber];
+        $requests = self::$requestFibers;
+
+        if ($requests === null) {
+            return self::shared();
         }
 
-        self::$userFibers ??= new \WeakMap();
-
-        if (!self::$userFibers->offsetExists($fiber)) {
-            self::$userFibers[$fiber] = new RequestScope();
+        if ($requests->offsetExists($fiber)) {
+            return $requests[$fiber];
         }
 
-        return self::$userFibers[$fiber];
+        foreach ($requests as $requestFiber => $scope) {
+            if ($requestFiber->isRunning()) {
+                return $scope->fiberScope($fiber);
+            }
+        }
+
+        return self::shared();
     }
 
     /**
-     * Number of open requests on this worker: tickets `enterRequest()` handed
-     * out that are not closed yet, degraded ones included.
+     * Number of open requests on this worker: tickets entered and not closed
+     * yet, degraded ones included.
      */
     public static function inFlight(): int
     {
-        return self::$inFlight;
+        return self::$open === null ? 0 : \count(self::$open);
     }
 
     /**
@@ -174,11 +189,10 @@ final class RequestScopes
     {
         self::$shared = null;
         self::$requestFibers = null;
-        self::$userFibers = null;
+        self::$open = null;
         self::$inWorker = false;
         self::$degraded = false;
         self::$bailedOut = false;
-        self::$inFlight = 0;
     }
 
     private static function shared(): RequestScope

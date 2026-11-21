@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Unit\Internal\Reset;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Fiber\Ticket;
 use OxPHP\Runtime\Internal\Reset\SymfonyContainerResetter;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
 use PHPUnit\Framework\TestCase;
@@ -255,7 +256,7 @@ final class SymfonyContainerResetterTest extends TestCase
         $container = $this->createContainer(['oxphp_runtime.fiber_isolation' => true]);
         $resetter = new SymfonyContainerResetter($this->createKernelReturning($container));
 
-        RequestScopes::enterRequest(); // from main: no current fiber, so the worker is degraded
+        RequestScopes::enterRequest(new Ticket()); // from main: no current fiber, so the worker is degraded
         self::assertTrue(RequestScopes::isDegraded());
 
         $resetter->reset();
@@ -287,7 +288,8 @@ final class SymfonyContainerResetterTest extends TestCase
     private static function markBailedOut(): void
     {
         $fiber = new \Fiber(static function (): void {
-            RequestScopes::leaveRequest(RequestScopes::enterRequest(), atShutdown: true);
+            RequestScopes::enterRequest($ticket = new Ticket());
+            RequestScopes::leaveRequest($ticket, atShutdown: true);
         });
         $fiber->start();
 

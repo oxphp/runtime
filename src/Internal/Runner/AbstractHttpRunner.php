@@ -7,6 +7,7 @@ namespace OxPHP\Runtime\Internal\Runner;
 use OxPHP\Http\RequestInterface as OxRequest;
 use OxPHP\Runtime\Internal\Bridge\OxPHP;
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Fiber\Ticket;
 use OxPHP\Runtime\Internal\Reset\ResetterChain;
 use Symfony\Component\Runtime\RunnerInterface;
 
@@ -70,14 +71,17 @@ abstract class AbstractHttpRunner implements RunnerInterface
         // exit(), a cancel or a client gone mid-stream skips every `finally`, but
         // OxPHP still runs its shutdown functions: the same ticket is closed from
         // one, registered first so the app's own can't skip it, and writing no
-        // output. Closing twice is a no-op; closing there marks the bailout.
+        // output. It is registered before the ticket is entered, so a request
+        // ended in between is never counted, and one ended after is always
+        // closed. Closing twice is a no-op; closing there marks the bailout.
         $this->bridge->serve(function (): void {
-            $ticket = RequestScopes::enterRequest();
+            $ticket = new Ticket();
 
             try {
                 $this->bridge->registerRequestShutdown(
                     static fn () => RequestScopes::leaveRequest($ticket, atShutdown: true),
                 );
+                RequestScopes::enterRequest($ticket);
 
                 // The soft reset gave this request a $_SERVER of its own, which
                 // the boot never wrote into. Put the boot's entries back, never

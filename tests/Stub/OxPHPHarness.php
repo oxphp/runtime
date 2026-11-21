@@ -158,8 +158,9 @@ final class OxPHPHarness
     /**
      * Backs the bridge's registerRequestShutdown() in tests (see bootstrap.php):
      * the callback runs at the end of the iteration in progress, after the
-     * handler and its `finally` blocks, as OxPHP runs a request's own shutdown
-     * functions.
+     * handler and its `finally` blocks, on the iteration's fiber, as OxPHP runs a
+     * request's own shutdown functions. After a bailout (see setBailoutMode()) it
+     * runs outside that fiber.
      */
     public function registerShutdown(\Closure $callback): void
     {
@@ -222,8 +223,12 @@ final class OxPHPHarness
                 \ob_start();
                 try {
                     // OxPHP runs every worker iteration inside a fiber of its
-                    // own; mirror that so fiber-keyed code sees a current fiber.
-                    $fiber = new \Fiber($handler);
+                    // own, and the request's shutdown functions on it after the
+                    // handler; mirror that so fiber-keyed code sees a current fiber.
+                    $fiber = new \Fiber(function () use ($handler): void {
+                        $handler();
+                        $this->runShutdownCallbacks();
+                    });
                     $fiber->start();
                     if (!$fiber->isTerminated()) {
                         // Kept, so the request's finally blocks don't run when the
@@ -233,8 +238,11 @@ final class OxPHPHarness
                             throw new \LogicException('handler suspended outside a RequestFiber scenario');
                         }
                         ++$this->bailouts;
+                        // OxPHP runs them on the request's fiber after unwinding
+                        // it; a suspended \Fiber can't be unwound without its
+                        // finally blocks, so here they run outside it.
+                        $this->runShutdownCallbacks();
                     }
-                    $this->runShutdownCallbacks();
                 } finally {
                     $this->shutdownCallbacks = null;
                     // A request that bailed out can leave buffers of its own open;

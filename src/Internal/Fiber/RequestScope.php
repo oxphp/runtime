@@ -47,4 +47,17 @@ final class RequestScope
     {
         $this->values[$owner] = [$value];
     }
+
+    /**
+     * The private scope of `$fiber` under this one, created empty on first use,
+     * for a fiber this scope's request is running (see `RequestScopes::current()`).
+     * It lives as long as both this scope and the fiber.
+     */
+    public function fiberScope(\Fiber $fiber): self
+    {
+        $scope = $this->get($fiber, static fn (): self => new self());
+        \assert($scope instanceof self);
+
+        return $scope;
+    }
 }

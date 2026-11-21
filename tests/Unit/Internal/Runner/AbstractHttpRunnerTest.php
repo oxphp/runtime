@@ -267,6 +267,57 @@ final class AbstractHttpRunnerTest extends TestCase
         self::assertSame([0], $state);
     }
 
+    public function test_the_shutdown_close_is_registered_before_the_request_counts(): void
+    {
+        // A request ended between the two (a time limit, a cancel) must neither
+        // stay counted nor be closed without having been counted.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+
+        $atRegistration = [];
+        OxPHP::replaceShutdownRegistrarForTests(static function (\Closure $callback) use ($h, &$atRegistration): void {
+            $atRegistration[] = RequestScopes::inFlight();
+            $h->registerShutdown($callback);
+        });
+
+        try {
+            $this->newRunner(handler: static function (): void {}, state: $state)->run();
+        } finally {
+            OxPHP::replaceShutdownRegistrarForTests(static function (\Closure $callback): void {
+                OxPHPHarness::instance()->registerShutdown($callback);
+            });
+        }
+
+        self::assertSame([0], $atRegistration);
+        self::assertSame(0, RequestScopes::inFlight());
+    }
+
+    public function test_the_apps_shutdown_functions_still_see_their_requests_scope(): void
+    {
+        // OxPHP runs them on the request's fiber once the iteration is over; stock
+        // Symfony's see the request's token and locale, and so must these.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $owner = new \stdClass();
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state) use ($h, $owner): void {
+                RequestScopes::current()->set($owner, $req->path());
+                $h->registerShutdown(static function () use (&$state, $owner): void {
+                    $state[] = RequestScopes::current()->get($owner, static fn (): string => 'lost');
+                });
+            },
+            state: $state,
+        );
+
+        $runner->run();
+
+        self::assertSame(['/a', '/b'], $state);
+    }
+
     public function test_requests_that_end_normally_never_mark_a_bailout(): void
     {
         $h = OxPHPHarness::instance();

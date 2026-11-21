@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Unit\Internal\Symfony;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Fiber\Ticket;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTokenStorage;
 use OxPHP\Runtime\Tests\Stub\Apps\FakeSymfonyKernel;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
@@ -100,11 +101,11 @@ final class FiberScopedTokenStorageTest extends TestCase
         $alice = self::token('alice');
 
         $fiber = new \Fiber(static function () use ($storage, $alice): ?TokenInterface {
-            $ticket = RequestScopes::enterRequest();
+            RequestScopes::enterRequest($ticket = new Ticket());
             $storage->setToken($alice);
             RequestScopes::leaveRequest($ticket);
 
-            $ticket = RequestScopes::enterRequest();
+            RequestScopes::enterRequest($ticket = new Ticket());
             $token = $storage->getToken();
             RequestScopes::leaveRequest($ticket);
 
@@ -121,11 +122,11 @@ final class FiberScopedTokenStorageTest extends TestCase
         $alice = self::token('alice');
 
         $fiber = new \Fiber(static function () use ($storage, $alice): ?TokenInterface {
-            RequestScopes::enterRequest();
+            RequestScopes::enterRequest($first = new Ticket());
             $storage->setToken($alice);
 
             // OxPHP reuses the fiber for the next request without a separate leave.
-            RequestScopes::enterRequest();
+            RequestScopes::enterRequest($second = new Ticket());
 
             return $storage->getToken();
         });

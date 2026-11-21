@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Tests\Unit\Internal\Symfony;
 
 use OxPHP\Runtime\Internal\Fiber\RequestScopes;
+use OxPHP\Runtime\Internal\Fiber\Ticket;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedRequestStack;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedTokenStorage;
 use OxPHP\Runtime\Internal\Symfony\FiberScopedUsageTrackingTokenStorage;
@@ -110,13 +111,13 @@ final class FiberScopedUsageTrackingTokenStorageTest extends TestCase
         $second = self::requestWithSession($usageSecond);
 
         $fiber = new \Fiber(static function () use ($requests, $storage, $first, $second): void {
-            $ticket = RequestScopes::enterRequest();
+            RequestScopes::enterRequest($ticket = new Ticket());
             $requests->push($first);
             $storage->enableUsageTracking();
             $storage->getToken();
             RequestScopes::leaveRequest($ticket);
 
-            $ticket = RequestScopes::enterRequest();
+            RequestScopes::enterRequest($ticket = new Ticket());
             $requests->push($second);
             $storage->getToken();
             RequestScopes::leaveRequest($ticket);

@@ -200,8 +200,11 @@ finishes first.
   `EntityManager::clear()`) clears it under requests that are still running.
 
 A fiber your own code creates inside a request sees no request and no
-token: its `getCurrentRequest()` is `null`. Pass the data in as a value
-instead.
+token: its `getCurrentRequest()` is `null`, and what it stores stays its own
+and that request's. The same goes for the destructors PHP's garbage collector
+runs during a request, which PHP 8.4+ runs in a fiber of their own. Pass the
+data in as a value instead. A request's shutdown functions see its state, as
+in stock Symfony.
 
 ### Requirements
 
