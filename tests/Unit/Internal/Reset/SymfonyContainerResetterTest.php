@@ -82,6 +82,31 @@ final class SymfonyContainerResetterTest extends TestCase
         self::assertSame('', $this->loggedOutput());
     }
 
+    public function test_marker_present_keeps_the_container_while_another_request_is_in_flight(): void
+    {
+        $servicesResetter = self::countingResetter();
+        $container = $this->createContainer(['oxphp_runtime.fiber_isolation' => true], ['services_resetter' => $servicesResetter]);
+        $resetter = new SymfonyContainerResetter($this->createKernelReturning($container));
+
+        $other = RequestFiber::start(static function (): void {
+            \Fiber::suspend();
+        });
+        $current = RequestFiber::start(static function () use ($resetter): int {
+            $resetter->reset();
+
+            return RequestScopes::inFlight();
+        });
+
+        self::assertSame(2, $current->result(), 'Both requests were open when the resetter ran.');
+
+        $other->resume();
+
+        self::assertTrue($other->isTerminated());
+        self::assertSame(0, $container->calls, 'No teardown under the request still in flight.');
+        self::assertSame(0, $servicesResetter->resets);
+        self::assertSame('', $this->loggedOutput());
+    }
+
     public function test_after_a_bailout_an_idle_request_resets_the_services_itself(): void
     {
         // The bailed-out request left Kernel::handle() without its finally, so

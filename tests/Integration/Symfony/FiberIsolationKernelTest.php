@@ -243,6 +243,32 @@ final class FiberIsolationKernelTest extends TestCase
         self::assertTrue(RequestScopes::hasBailedOut());
     }
 
+    public function test_overlapping_requests_through_the_runner_keep_the_container(): void
+    {
+        // With isolation installed, a request that ends while another is in
+        // flight must not tear the container down under it (issue #5).
+        $kernel = $this->bootKernel();
+        $counter = $kernel->getContainer()->get(ResetCounter::class);
+        self::assertInstanceOf(ResetCounter::class, $counter);
+
+        $runner = new HttpKernelRunner($kernel, new OxPHP(), userResetters: []);
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true);
+        $harness->pushRequest(FakeOxRequest::get('/main'));
+
+        $stream = $this->startRequest(Request::create('/stream?suspend=1'));
+
+        $runner->run();
+
+        self::assertFalse($stream->isTerminated(), 'The stream stayed open while the runner served /main.');
+        self::assertSame(['own'], $harness->capturedOutputs());
+        self::assertSame($counter, $kernel->getContainer()->get(ResetCounter::class), 'The container was not torn down.');
+        self::assertSame(0, $counter->resets, 'No reset while the stream is open.');
+
+        self::assertTrue($stream->resume()->isTerminated());
+        self::assertInstanceOf(StreamedResponse::class, $stream->result());
+    }
+
     public function test_a_user_fiber_inside_a_worker_request_sees_no_request(): void
     {
         $this->bootKernel();
