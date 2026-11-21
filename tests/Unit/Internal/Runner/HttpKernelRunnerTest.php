@@ -10,6 +10,7 @@ use OxPHP\Runtime\Tests\Stub\Apps\FakeSymfonyKernel;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -131,6 +132,29 @@ final class HttpKernelRunnerTest extends TestCase
         self::assertSame('sym:/ok', $outputs[1]);
         self::assertSame(2, $resets);
         self::assertSame($level, \ob_get_level());
+    }
+
+    public function test_worker_passes_each_response_status_to_the_sapi(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        foreach (['/missing', '/redirect', '/teapot', '/stream', '/ok'] as $path) {
+            $h->pushRequest(FakeOxRequest::get($path));
+        }
+
+        $kernel = new FakeSymfonyKernel(static fn (Request $r): Response => match ($r->getPathInfo()) {
+            '/missing' => new Response('missing', 404),
+            '/redirect' => new RedirectResponse('/ok', 302),
+            '/teapot' => new Response('teapot', 418),
+            '/stream' => new StreamedResponse(static function (): void {
+                echo 'chunk';
+            }, 201),
+            default => new Response('ok', 200),
+        });
+
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [])->run();
+
+        self::assertSame([404, 302, 418, 201, 200], $h->capturedStatuses());
     }
 
     public function test_worker_loop_resets_per_request(): void

@@ -44,6 +44,26 @@ final class OxPHPHarnessTest extends TestCase
         self::assertSame(['out:/a', 'out:/b'], $harness->capturedOutputs());
     }
 
+    public function test_drive_worker_captures_status_per_request_and_starts_each_at_200(): void
+    {
+        \http_response_code(503); // leftover from an earlier test must not leak in
+
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true);
+        $harness->pushRequest(FakeOxRequest::get('/ok'));
+        $harness->pushRequest(FakeOxRequest::get('/missing'));
+        $harness->pushRequest(FakeOxRequest::get('/ok'));
+
+        \oxphp_worker(static function (): void {
+            if (\oxphp_http_request()->path() === '/missing') {
+                \http_response_code(404);
+            }
+        });
+
+        self::assertSame([200, 404, 200], $harness->capturedStatuses());
+        self::assertSame(200, \http_response_code());
+    }
+
     public function test_request_id_and_worker_id(): void
     {
         OxPHPHarness::instance()->setRequestId('abc123')->setWorkerId(7);
