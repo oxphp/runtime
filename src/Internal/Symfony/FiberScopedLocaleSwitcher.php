@@ -13,9 +13,11 @@ use Symfony\Contracts\Translation\LocaleAwareInterface;
  * @internal A `LocaleSwitcher` that keeps the current locale per request scope.
  *
  * The stock switcher holds the locale in a private field shared by the whole
- * worker. Here `setLocale()` runs the parent's fan-out unchanged
- * (`\Locale::setDefault()`, `_locale` on the request context, `setLocale()` on
- * every locale-aware service), then stores the locale in the caller's scope.
+ * worker. Here `setLocale()` stores the locale in the caller's scope, then runs
+ * the parent's fan-out unchanged (`\Locale::setDefault()`, `_locale` on the
+ * request context, `setLocale()` on every locale-aware service). The store comes
+ * first because the parent writes its own field before the fan-out: if a
+ * locale-aware service throws, the new locale stays recorded, exactly as in stock.
  * The scoped services (translator, request context) land that fan-out in their
  * own per-scope state; everything else it reaches (the slugger, app services)
  * stays shared. The parent's private field is therefore never read: `getLocale()`
@@ -73,9 +75,11 @@ final class FiberScopedLocaleSwitcher extends LocaleSwitcher
 
     public function setLocale(string $locale): void
     {
-        parent::setLocale($locale);
-
+        // Before the fan-out, as the parent writes its own field: if a locale-aware
+        // service throws, the scope keeps the new locale, as it does in stock.
         RequestScopes::current()->set($this->token, $locale);
+
+        parent::setLocale($locale);
     }
 
     public function getLocale(): string

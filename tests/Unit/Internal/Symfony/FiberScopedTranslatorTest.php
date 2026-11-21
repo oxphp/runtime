@@ -9,6 +9,7 @@ use OxPHP\Runtime\Internal\Symfony\FiberScopedTranslator;
 use OxPHP\Runtime\Tests\Stub\RequestFiber;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpKernel\CacheWarmer\WarmableInterface;
+use Symfony\Component\Translation\DataCollectorTranslator;
 use Symfony\Component\Translation\Exception\InvalidArgumentException;
 use Symfony\Component\Translation\Loader\ArrayLoader;
 use Symfony\Component\Translation\MessageCatalogue;
@@ -208,7 +209,7 @@ final class FiberScopedTranslatorTest extends TestCase
         self::assertSame('en', $translator->getLocale());
     }
 
-    public function test_it_forwards_fallback_locales_and_unknown_methods_to_the_inner(): void
+    public function test_it_forwards_fallback_locales_and_global_parameters_to_the_inner(): void
     {
         $inner = self::inner();
         $inner->setFallbackLocales(['en']);
@@ -219,11 +220,38 @@ final class FiberScopedTranslatorTest extends TestCase
         self::assertSame(['%app%' => 'oxphp'], $translator->getGlobalParameters());
     }
 
-    public function test_an_inner_without_fallback_locales_yields_none(): void
+    public function test_it_forwards_unknown_methods_to_the_inner(): void
+    {
+        $inner = self::inner();
+        $translator = new FiberScopedTranslator($inner);
+
+        $translator->setFallbackLocales(['ru']);
+
+        self::assertSame(['ru'], $inner->getFallbackLocales());
+    }
+
+    public function test_the_data_collector_translator_still_sees_the_inners_fallback_locales_and_global_parameters(): void
+    {
+        $inner = self::inner();
+        $inner->setFallbackLocales(['en']);
+        $inner->addGlobalParameter('%app%', 'oxphp');
+
+        // The stock behaviour the profiler's translation panel relies on.
+        $stock = new DataCollectorTranslator($inner);
+        $scoped = new DataCollectorTranslator(new FiberScopedTranslator($inner));
+
+        self::assertSame(['en'], $stock->getFallbackLocales());
+        self::assertSame(['%app%' => 'oxphp'], $stock->getGlobalParameters());
+        self::assertSame($stock->getFallbackLocales(), $scoped->getFallbackLocales());
+        self::assertSame($stock->getGlobalParameters(), $scoped->getGlobalParameters());
+    }
+
+    public function test_an_inner_without_fallback_locales_or_global_parameters_yields_none(): void
     {
         $translator = new FiberScopedTranslator(self::bareInner());
 
         self::assertSame([], $translator->getFallbackLocales());
+        self::assertSame([], $translator->getGlobalParameters());
     }
 
     public function test_warm_up_forwards_to_a_warmable_inner_and_is_empty_otherwise(): void

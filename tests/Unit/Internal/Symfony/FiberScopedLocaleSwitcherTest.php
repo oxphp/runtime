@@ -170,6 +170,36 @@ final class FiberScopedLocaleSwitcherTest extends TestCase
         self::assertSame('ru', $request->result());
     }
 
+    public function test_a_locale_aware_service_that_throws_leaves_the_new_locale_recorded_like_stock(): void
+    {
+        $failing = new class () implements LocaleAwareInterface {
+            public function setLocale(string $locale): void
+            {
+                throw new \RuntimeException('cannot switch to ' . $locale);
+            }
+
+            public function getLocale(): string
+            {
+                return 'en';
+            }
+        };
+
+        $stock = new LocaleSwitcher('en', [$failing], new RequestContext());
+        $scoped = new FiberScopedLocaleSwitcher('en', [$failing], self::context());
+
+        $attempt = static function (LocaleSwitcher $switcher): string {
+            try {
+                $switcher->setLocale('fr');
+            } catch (\RuntimeException) {
+            }
+
+            return $switcher->getLocale();
+        };
+
+        self::assertSame('fr', $attempt($stock));
+        self::assertSame('fr', RequestFiber::start(static fn (): string => $attempt($scoped))->result());
+    }
+
     public function test_reset_returns_the_caller_to_the_boot_locale_only(): void
     {
         $translator = $this->translator();

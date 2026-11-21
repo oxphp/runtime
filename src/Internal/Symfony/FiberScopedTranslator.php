@@ -9,6 +9,7 @@ use Symfony\Component\HttpKernel\CacheWarmer\WarmableInterface;
 use Symfony\Component\Translation\MessageCatalogueInterface;
 use Symfony\Component\Translation\TranslatorBagInterface;
 use Symfony\Contracts\Translation\LocaleAwareInterface;
+use Symfony\Contracts\Translation\TranslatableInterface;
 use Symfony\Contracts\Translation\TranslatorInterface;
 
 /**
@@ -25,10 +26,11 @@ use Symfony\Contracts\Translation\TranslatorInterface;
  * in the constructor, never the inner's current locale (which is whichever
  * request wrote last).
  *
- * The inner may itself be wrapped (logging, the data collector in debug). The
- * scoped translator forwards `getFallbackLocales()` and anything else it does
- * not declare (`__call()`), as `DataCollectorTranslator` does, so callers that
- * probe for `Translator`-only methods keep working through it.
+ * The inner may itself be wrapped (logging, the data collector in debug).
+ * `DataCollectorTranslator` probes the translator it wraps with `method_exists()`
+ * for `getFallbackLocales()` and `getGlobalParameters()`, and `__call()` does not
+ * satisfy that probe, so both are declared here and forward to the inner when it
+ * has them. Any other method is forwarded by `__call()`.
  *
  * Per-scope state is keyed by a private token object, not by `$this`, so
  * `clone $translator` can mint a new token and give the clone the current
@@ -111,6 +113,20 @@ final class FiberScopedTranslator implements TranslatorInterface, TranslatorBagI
     {
         if (\method_exists($this->inner, 'getFallbackLocales')) {
             return $this->inner->getFallbackLocales();
+        }
+
+        return [];
+    }
+
+    /**
+     * `DataCollectorTranslator` probes for this with `method_exists()`.
+     *
+     * @return array<string, string|int|float|TranslatableInterface>
+     */
+    public function getGlobalParameters(): array
+    {
+        if (\method_exists($this->inner, 'getGlobalParameters')) {
+            return $this->inner->getGlobalParameters();
         }
 
         return [];
