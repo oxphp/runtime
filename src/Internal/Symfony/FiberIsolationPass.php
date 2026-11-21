@@ -30,12 +30,14 @@ use Symfony\Component\Translation\Translator;
  * All or nothing: the pass first collects every reason a present service can't be
  * scoped safely (a custom class `setClass()` would clobber or a decorator would
  * hide, a `translator` alias of anything but `translator.default`, a public method
- * the scoped class doesn't declare on this Symfony version, a context listener
- * without SecurityBundle's static response listener, a `services_resetter` class
- * that implements neither `ServicesResetterInterface`, symfony/http-kernel < 7.3). With any
- * reason it changes nothing, sets `oxphp_runtime.fiber_isolation` to `false` and
- * records the reasons in `oxphp_runtime.fiber_isolation_reason` and the container
- * log, so the runner keeps its full teardown. Otherwise it installs every scoped
+ * the scoped class doesn't declare on this Symfony version, a scoped constructor
+ * that doesn't take what the stock one does (`setClass()` keeps the definition's
+ * arguments), a context listener without SecurityBundle's static response
+ * listener, a `services_resetter` class that implements neither
+ * `ServicesResetterInterface`, symfony/http-kernel < 7.3). With any reason it
+ * changes nothing, sets `oxphp_runtime.fiber_isolation` to `false` and records the
+ * reasons in `oxphp_runtime.fiber_isolation_reason` and the container log, so the
+ * runner keeps its full teardown. Otherwise it installs every scoped
  * service and sets the marker to `true`. A missing service id is skipped: routing,
  * SecurityBundle and the translator are all optional.
  *
@@ -154,7 +156,14 @@ final class FiberIsolationPass implements CompilerPassInterface
             return [\sprintf('service "%s" uses %s, which does not exist', $id, $stock)];
         }
 
-        return self::overrideReasons($id, $scoped, $stock, $exempt);
+        $reasons = self::overrideReasons($id, $scoped, $stock, $exempt);
+        $differences = OverrideCheck::constructorDifferences($scoped, $stock);
+
+        if ($differences !== []) {
+            $reasons[] = \sprintf('service "%s" cannot be scoped: the constructor of %s %s', $id, $scoped, \implode(', ', $differences));
+        }
+
+        return $reasons;
     }
 
     /**
