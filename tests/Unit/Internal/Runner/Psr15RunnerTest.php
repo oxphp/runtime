@@ -265,6 +265,21 @@ final class Psr15RunnerTest extends TestCase
         self::assertSame([0, 0, 4], $flushes);
     }
 
+    public function test_a_request_without_a_host_header_is_served_with_localhost_as_the_uri_host(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        // HTTP/1.0 lets a request leave out Host, as some load balancers' health checks do.
+        $h->pushRequest(CapturedOxPHPServer::http10WithoutHost()[0])->pushRequest(FakeOxRequest::get('/next'));
+        $f = new Psr17Factory();
+        $handler = new FakePsr15Handler(static fn (ServerRequestInterface $r): ResponseInterface => $f->createResponse()->withBody($f->createStream((string) $r->getUri())));
+
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+
+        self::assertSame([200, 200], $h->capturedStatuses());
+        self::assertSame(['http://localhost/server.php?a=1', 'http://localhost/next'], $h->capturedOutputs());
+    }
+
     public function test_the_request_carries_the_server_params_oxphp_registers_except_what_the_request_api_has_no_source_for(): void
     {
         [$ox, $real] = CapturedOxPHPServer::post();

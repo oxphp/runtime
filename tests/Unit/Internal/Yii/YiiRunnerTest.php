@@ -293,6 +293,18 @@ final class YiiRunnerTest extends TestCase
         self::assertStringNotContainsString(EmitterHeadersHaveBeenSentException::class, $log);
     }
 
+    public function test_a_request_without_a_host_header_is_served(): void
+    {
+        $h = OxPHPHarness::instance()->setWorker(true);
+        // HTTP/1.0 lets a request leave out Host, as some load balancers' health checks do.
+        $h->pushRequest(new FakeOxRequest(queryString: 'route=ok', host: '', httpProtocolVersion: '1.0', query: ['route' => 'ok']));
+
+        $this->runner()->run();
+
+        self::assertSame([200], $h->capturedStatuses());
+        self::assertSame('ok', \json_decode($h->capturedOutputs()[0], true, flags: \JSON_THROW_ON_ERROR)['route']);
+    }
+
     public function test_a_given_emitter_is_used_instead_of_the_response_emitter(): void
     {
         $emitter = new RecordingEmitter();

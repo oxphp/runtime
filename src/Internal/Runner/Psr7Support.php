@@ -38,7 +38,7 @@ final class Psr7Support
         array $serverParams = [],
     ): ServerRequestInterface {
         $req = $requests
-            ->createServerRequest($ox->method(), $ox->fullUri(), $serverParams)
+            ->createServerRequest($ox->method(), self::uri($ox), $serverParams)
             ->withProtocolVersion($ox->httpProtocolVersion())
             ->withCookieParams($ox->cookies())
             ->withQueryParams($ox->query() ?? [])
@@ -50,6 +50,23 @@ final class Psr7Support
         }
 
         return $req;
+    }
+
+    /**
+     * OxPHP's full URI, with the host `SERVER_NAME` has when the request names
+     * none: OxPHP's `http:///path` has no host, and PSR-7 factories refuse it.
+     */
+    private static function uri(OxRequest $ox): string
+    {
+        $uri = $ox->fullUri();
+        if ($ox->host() !== '') {
+            return $uri;
+        }
+
+        // OxPHP writes `scheme://host[:port]path[?query]`, so the host goes after `://`.
+        $prefix = $ox->scheme() . '://';
+
+        return $prefix . ServerParams::hostName($ox) . \substr($uri, \strlen($prefix));
     }
 
     /**

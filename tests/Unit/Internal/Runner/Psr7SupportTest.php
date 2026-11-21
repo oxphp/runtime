@@ -7,6 +7,8 @@ namespace OxPHP\Runtime\Tests\Unit\Internal\Runner;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7\Stream;
 use OxPHP\Runtime\Internal\Runner\Psr7Support;
+use OxPHP\Runtime\Internal\Runner\ServerParams;
+use OxPHP\Runtime\Tests\Stub\CapturedOxPHPServer;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\MisreportedSizeStream;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
@@ -48,6 +50,30 @@ final class Psr7SupportTest extends TestCase
         self::assertSame('raw', (string) $r->getBody());
         self::assertSame('1.1.1.1', $r->getServerParams()['REMOTE_ADDR']);
         self::assertSame('test-req-id', $r->getAttribute('OXPHP_REQUEST_ID'));
+    }
+
+    /**
+     * @return iterable<string, array{FakeOxRequest, string}>
+     */
+    public static function provideA_request_without_a_host_gets_localhost_as_the_uri_host_with_the_port_server_params_haveCases(): iterable
+    {
+        yield 'HTTP/1.0 without Host (captured)' => [CapturedOxPHPServer::http10WithoutHost()[0], 'http://localhost/server.php?a=1'];
+        // A trusted proxy's X-Forwarded-Port still sets the port.
+        yield 'a forwarded port' => [new FakeOxRequest(path: '/p', host: '', port: 8080, httpProtocolVersion: '1.0'), 'http://localhost:8080/p'];
+        yield 'https' => [new FakeOxRequest(path: '/', scheme: 'https', host: '', port: 443, httpProtocolVersion: '1.0'), 'https://localhost/'];
+    }
+
+    #[DataProvider('provideA_request_without_a_host_gets_localhost_as_the_uri_host_with_the_port_server_params_haveCases')]
+    public function test_a_request_without_a_host_gets_localhost_as_the_uri_host_with_the_port_server_params_have(FakeOxRequest $ox, string $expected): void
+    {
+        $f = new Psr17Factory();
+        $server = ServerParams::build($ox, 'OxPHP/9.9.9');
+
+        $uri = Psr7Support::baseRequest($ox, $f, $f, $server)->getUri();
+
+        self::assertSame($expected, (string) $uri);
+        self::assertSame($server['SERVER_NAME'], $uri->getHost());
+        self::assertSame((int) $server['SERVER_PORT'], $uri->getPort() ?? ($uri->getScheme() === 'https' ? 443 : 80));
     }
 
     public function test_body_chunks_reads_8192_bytes_at_a_time_from_the_start(): void

@@ -36,8 +36,7 @@ final class ServerParams
             'QUERY_STRING' => $qs ?? '',
             'SERVER_PROTOCOL' => $ox->httpProtocol(),
             'SERVER_SOFTWARE' => $serverSoftware,
-            // OxPHP's name for a request that names no host: HTTP/1.0 may leave out `Host`.
-            'SERVER_NAME' => $ox->host() !== '' ? $ox->host() : 'localhost',
+            'SERVER_NAME' => self::hostName($ox),
             'SERVER_PORT' => (string) $ox->port(),
             'REMOTE_ADDR' => $ox->ip(),
             'REQUEST_TIME' => (int) $ox->startTime(),
@@ -72,5 +71,14 @@ final class ServerParams
         }
 
         return $server;
+    }
+
+    /**
+     * The request's host, or `localhost`, OxPHP's `SERVER_NAME` for a request
+     * that names none: HTTP/1.0 may leave out `Host`.
+     */
+    public static function hostName(OxRequest $ox): string
+    {
+        return $ox->host() !== '' ? $ox->host() : 'localhost';
     }
 }

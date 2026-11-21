@@ -63,6 +63,7 @@ final class ServerRequestBuilderTest extends TestCase
         yield 'GET with query, cookie and header names with _ or .' => CapturedOxPHPServer::get();
         yield 'POST urlencoded' => CapturedOxPHPServer::post();
         yield 'host and port from the Host header' => CapturedOxPHPServer::hostWithPort();
+        yield 'HTTP/1.0 without a Host header' => CapturedOxPHPServer::http10WithoutHost();
         $nested = ['a' => '1', 'b' => ['c' => '2']];
         yield 'POST urlencoded, nested' => CapturedOxPHPServer::postWith('POST', '/f', 'application/x-www-form-urlencoded', \http_build_query($nested), $nested);
         yield 'POST multipart' => CapturedOxPHPServer::postWith('POST', '/u', 'multipart/form-data; boundary=x', '', ['title' => 't']);
