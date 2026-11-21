@@ -94,4 +94,57 @@ final class FiberScopedRequestContextTest extends TestCase
         self::assertSame($context, $context->setParameter('k', 'v'));
         self::assertSame('c.test', $context->getHost());
     }
+
+    public function test_a_clone_keeps_the_state_and_is_independent_outside_worker_mode(): void
+    {
+        $context = new FiberScopedRequestContext(new RequestContext('/base', 'GET', 'example.com', 'https'));
+
+        self::assertSame(self::expectedAfterClone(), self::cloneAndMutate($context));
+    }
+
+    public function test_a_clone_keeps_the_state_and_is_independent_inside_a_request_scope(): void
+    {
+        $context = new FiberScopedRequestContext(new RequestContext('/base', 'GET', 'example.com', 'https'));
+
+        $inRequest = RequestFiber::start(static fn (): array => self::cloneAndMutate($context));
+
+        self::assertSame(self::expectedAfterClone(), $inRequest->result());
+    }
+
+    /**
+     * Mirrors `UrlMatcher`: `(clone $context)->fromRequest($request)` on a context that
+     * already holds the current request's state.
+     *
+     * @return array<string, mixed>
+     */
+    private static function cloneAndMutate(FiberScopedRequestContext $context): array
+    {
+        $context->setHost('orig.test');
+        $context->setParameter('_locale', 'en');
+
+        $clone = clone $context;
+
+        $seenByClone = [$clone->getHost(), $clone->getParameter('_locale')];
+
+        $clone->fromRequest(Request::create('http://clone.test/p'));
+        $clone->setParameter('_locale', 'ru');
+
+        return [
+            'clone before' => $seenByClone,
+            'clone after' => [$clone->getHost(), $clone->getScheme(), $clone->getParameter('_locale')],
+            'original after' => [$context->getHost(), $context->getScheme(), $context->getParameter('_locale')],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function expectedAfterClone(): array
+    {
+        return [
+            'clone before' => ['orig.test', 'en'],
+            'clone after' => ['clone.test', 'http', 'ru'],
+            'original after' => ['orig.test', 'https', 'en'],
+        ];
+    }
 }

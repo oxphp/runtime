@@ -139,4 +139,59 @@ final class FiberScopedRequestStackTest extends TestCase
 
         self::assertSame($request, $fiber->getReturn());
     }
+
+    public function test_a_clone_keeps_the_requests_and_is_independent_outside_worker_mode(): void
+    {
+        $stack = new FiberScopedRequestStack();
+        $request = Request::create('/main');
+        $extra = Request::create('/extra');
+
+        [$drained, $originalAfterDrain, $cloneAfterDrain, $originalAfterClonePush] = self::cloneAndDrain($stack, $request, $extra);
+
+        self::assertSame([$request], $drained);
+        self::assertSame($request, $originalAfterDrain);
+        self::assertNull($cloneAfterDrain);
+        self::assertSame($request, $originalAfterClonePush);
+    }
+
+    public function test_a_clone_keeps_the_requests_and_is_independent_inside_a_request_scope(): void
+    {
+        $stack = new FiberScopedRequestStack();
+        $request = Request::create('/main');
+        $extra = Request::create('/extra');
+
+        $inRequest = RequestFiber::start(static fn (): array => self::cloneAndDrain($stack, $request, $extra));
+
+        [$drained, $originalAfterDrain, $cloneAfterDrain, $originalAfterClonePush] = $inRequest->result();
+
+        self::assertSame([$request], $drained);
+        self::assertSame($request, $originalAfterDrain);
+        self::assertNull($cloneAfterDrain);
+        self::assertSame($request, $originalAfterClonePush);
+    }
+
+    /**
+     * Mirrors `AbstractSessionListener`: clone the stack, then pop the clone until empty.
+     *
+     * @return array{list<Request>, ?Request, ?Request, ?Request}
+     */
+    private static function cloneAndDrain(FiberScopedRequestStack $stack, Request $request, Request $extra): array
+    {
+        $stack->push($request);
+
+        $clone = clone $stack;
+
+        $drained = [];
+        while (($popped = $clone->pop()) !== null) {
+            $drained[] = $popped;
+        }
+
+        $originalAfterDrain = $stack->getCurrentRequest();
+        $cloneAfterDrain = $clone->getCurrentRequest();
+
+        // Pushing onto the clone must not show up in the original either.
+        $clone->push($extra);
+
+        return [$drained, $originalAfterDrain, $cloneAfterDrain, $stack->getCurrentRequest()];
+    }
 }

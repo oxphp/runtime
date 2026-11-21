@@ -18,6 +18,12 @@ use Symfony\Component\Routing\RequestContext;
  * return this scoped context, not the inner one. `fromUri()` is static and
  * builds a fresh stock context, so it needs no override.
  *
+ * Per-scope state is keyed by a private token object, not by `$this`, so
+ * `clone $context` can mint a new token and give the clone a copy of the
+ * current scope's context. Symfony clones the context (`UrlMatcher` runs
+ * `(clone $context)->fromRequest($request)` on every match), and a clone must
+ * start from the current state and never write back to the original.
+ *
  * Outside worker mode there is a single shared scope, so this behaves exactly
  * like a stock `RequestContext` built from the template.
  */
@@ -30,11 +36,28 @@ final class FiberScopedRequestContext extends RequestContext
      */
     private bool $constructing = true;
 
+    private object $token;
+
     public function __construct(private readonly RequestContext $template)
     {
+        $this->token = new \stdClass();
+
         parent::__construct();
 
         $this->constructing = false;
+    }
+
+    /**
+     * The clone gets its own token and a copy of the current scope's context,
+     * so changing one never changes the other.
+     */
+    public function __clone()
+    {
+        $inner = $this->inner();
+
+        $this->token = new \stdClass();
+
+        RequestScopes::current()->set($this->token, clone $inner);
     }
 
     public function fromRequest(Request $request): static
@@ -180,7 +203,7 @@ final class FiberScopedRequestContext extends RequestContext
             return new RequestContext();
         }
 
-        $inner = RequestScopes::current()->get($this, fn (): RequestContext => clone $this->template);
+        $inner = RequestScopes::current()->get($this->token, fn (): RequestContext => clone $this->template);
         \assert($inner instanceof RequestContext);
 
         return $inner;
