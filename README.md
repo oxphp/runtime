@@ -56,6 +56,9 @@ return fn(array $context) => new Kernel($context['APP_ENV'], (bool)$context['APP
 Any other type throws `LogicException`. Console applications are out of
 scope — run them under the stock PHP CLI SAPI.
 
+Yii 3 web applications don't return anything from `index.php`; they use
+`OxPHPApplicationRunner` instead of `symfony/runtime` — see [Yii 3](#yii-3).
+
 ## Traditional vs worker mode
 
 Mode is auto-detected via `oxphp_is_worker()`. Nothing to configure on
@@ -314,6 +317,100 @@ $response = new JsonResponse(['status' => 'accepted']);
 \oxphp_finish_request();
 // background work continues; the client already got the response
 ```
+
+## Yii 3
+
+### Setup
+
+In `yiisoft/app`'s `public/index.php`, replace `HttpApplicationRunner` with
+`OxPHPApplicationRunner`, and list the services the workers may share:
+
+```php
+use OxPHP\Runtime\Yii\OxPHPApplicationRunner;
+use Psr\SimpleCache\CacheInterface;
+use Yiisoft\Db\Connection\ConnectionInterface;
+
+$runner = new OxPHPApplicationRunner(
+    rootPath: $root,
+    debug: Environment::appDebug(),
+    checkEvents: Environment::appDebug(),
+    environment: Environment::appEnv(),
+    temporaryErrorHandler: new ErrorHandler(/* as before */),
+    sharedServices: [ConnectionInterface::class, CacheInterface::class],
+);
+$runner->run();
+```
+
+- The constructor takes `HttpApplicationRunner`'s arguments, except the
+  deprecated ones (`logger`, `bufferSize` and the three `use*Middleware`
+  flags), plus `sharedServices`.
+- Outside OxPHP (PHP-FPM, `php -S`, CLI), `run()` is `HttpApplicationRunner`
+  built from the same arguments, so keep `yiisoft/yii-runner-http` installed.
+- It doesn't go through `symfony/runtime`: no `APP_RUNTIME`, no
+  `autoload_runtime.php`.
+- Pass a custom config with `withConfig()`. `withContainer()` throws under
+  OxPHP, since every request's container is built from the config.
+- A given `emitter` sends the responses under OxPHP too; without one, the
+  runtime's own emitter streams the body chunk by chunk.
+
+### Per-request isolation
+
+OxPHP runs overlapping requests on one worker, so a container shared between
+them lets one request's `CurrentRoute`, session, translator locale or view
+state leak into another (or makes the second request fail). Every request
+therefore gets a new container, with its own instance of every service not
+listed in `sharedServices`, your own singletons included. The container is
+dropped when the request ends; it is never reused and never reset. On
+`yiisoft/app`'s home page that costs about 0.4 ms per request.
+
+### Lifecycle
+
+- `ApplicationStartup` and `ApplicationShutdown` fire once per worker, from a
+  boot container. Requests never see that container's non-shared services,
+  so what those listeners do to them doesn't reach any request.
+- Bootstrap callbacks (the `bootstrap-web` group) run per request, against
+  that request's container, unlike Yii's FrankenPHP runner, which runs them
+  once per worker.
+- `AfterEmit` fires once per request, after the response is sent.
+
+### Rules for shared services
+
+The listed services are built once, at worker boot. A listed id that has a
+`reset` definition, or that depends on a service that has one (such as
+`CurrentRoute`), fails the boot with a message naming both.
+
+- Listed services live for the worker's life and are never reset.
+- They see every request that overlaps, so any PHP state inside them is
+  shared between those requests.
+- List every id your code asks for. An id that isn't listed, such as the
+  concrete class behind a listed interface, gets a fresh instance per
+  request. An alias defined as `Reference::to()` a listed id gets the shared
+  instance.
+- A service that keeps a container or an `Injector` can't be shared. That
+  includes the event dispatcher, `Application` and middleware dispatchers.
+  Boot fails and names the property that holds it.
+
+### What the guard can't see
+
+- State hidden inside a shared service, such as a DB wrapper's transaction
+  nesting level. OxPHP keeps a shared connection safe at the protocol level,
+  but not the PHP object around it.
+- Services from delegate containers (the `di-delegates-web` group). A shared
+  service that depends on a per-request service from a delegate passes boot.
+- Tags. Listing a `tag@…` id doesn't share its services; each request still
+  builds them. List the member services instead.
+
+### Requests and environment
+
+- Request data comes from OxPHP, not the superglobals, except uploads, which
+  are read from `$_FILES`. Both work with `SUPERGLOBALS_ENABLED=false`.
+- Read the environment from `$_ENV` or `getenv()`, not `$_SERVER`: OxPHP
+  rebuilds `$_SERVER` for every request.
+
+### Tested versions
+
+`yiisoft/yii-runner` 2.2, `yiisoft/yii-runner-http` 3.2, `yiisoft/yii-http` 1.1,
+`yiisoft/di` 1.4.
 
 ## License
 

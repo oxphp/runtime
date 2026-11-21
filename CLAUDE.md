@@ -14,10 +14,11 @@ PHPUnit is configured with `failOnWarning`, `failOnNotice`, and `failOnRisky` al
 
 ## Public API surface
 
-Only three classes are public:
+Only four classes are public:
 - `OxPHP\Runtime\Runtime` — the runtime entry point (referenced from `APP_RUNTIME` and `composer.json`'s `extra.runtime.class`).
 - `OxPHP\Runtime\Resetter\ResetterInterface` — for user-written worker-mode resetters.
 - `OxPHP\Runtime\Symfony\OxPHPBundle` — opt-in Symfony bundle (one line in `config/bundles.php`) that isolates per-request services between overlapping requests. Its container parameters `oxphp_runtime.fiber_isolation` and `oxphp_runtime.fiber_isolation_reason` are public too.
+- `OxPHP\Runtime\Yii\OxPHPApplicationRunner` — the Yii 3 runner, constructed in the app's `public/index.php` in place of `HttpApplicationRunner`.
 
 Everything under `OxPHP\Runtime\Internal\` is `@internal` and may change without a major version bump. Don't add cross-package imports of `Internal\` symbols and don't expose them in public docs.
 
@@ -96,6 +97,13 @@ OxPHP runs overlapping requests in separate fibers on one worker. Symfony's per-
 - **The `services_resetter` guard** (`AbstractGuardedServicesResetter`) is picked by the interface the `services_resetter` class implements (`is_a()`, which doesn't autoload the interface): HttpKernel's, checked first (7.3+; on 8.1 it extends DependencyInjection's, and HttpKernel's 8.1 `ServicesResetter` implements both) → `LegacyGuardedServicesResetter`, otherwise DependencyInjection's (8.1+, where `ServicesResetterInterface` moved) → `GuardedServicesResetter`. Not by which interfaces exist: FrameworkBundle 8.0 with DependencyInjection 8.1 still registers HttpKernel's. It decorates `services_resetter`, records in the calling request's scope that it was reached, and calls the inner reset only when `inFlight() <= 1`; Symfony reaches it at almost every request start, so there is no pending flag. Under continuous overlap shared `kernel.reset` services wait for an idle worker.
 - Adding a scoped service: extend the pass's lists (and `OverrideCheck` exemptions for methods that keep no per-request state), cover it in a unit test with `RequestFiber` and in the integration test, and keep it stock outside worker mode.
 
+### Yii 3 (outside symfony/runtime)
+
+Yii apps don't return anything from `index.php`; they construct `OxPHPApplicationRunner` and call `run()`, so `Runtime` is not involved. Off the OxPHP SAPI (the same `\PHP_SAPI === 'cli' || !\function_exists('oxphp_server_info')` check, made before any `oxphp_*()` call, the bridge's constructor included) `run()` builds a `HttpApplicationRunner` from the same arguments and runs it — nothing else. Under OxPHP, once per worker: `Internal\Yii\ContainerBlueprint` flattens the DI config, `Internal\Yii\SharedServices` builds the `sharedServices` list in a guarded container, a boot container serves the error handler, the events check and `Application::start()`/`shutdown()`, and `Internal\Yii\YiiRunner` (an `AbstractHttpRunner`) runs the loop. Invariants:
+- Every request gets a new container from the blueprint, built inside its fiber; overlapping requests never share a non-listed service.
+- A request container is never reused, and `StateResetter` is never called — resetting under overlap would clear another request's in-flight state.
+- Shared services are guarded at boot: a listed id with a `reset` definition, one that depends on a per-request service, or one that holds a container or an `Injector` fails the worker before any request. Call `withSharedInstances()` once, only with `SharedServices::resolve()`'s result.
+
 ## Tests
 
 - `tests/bootstrap.php` declares polyfills only when the real `oxphp_sapi` extension isn't loaded.
@@ -106,6 +114,7 @@ OxPHP runs overlapping requests in separate fibers on one worker. Symfony's per-
 - `RequestScopes` is static, so every test class that touches it or a scoped service calls `RequestScopes::resetForTests()` in `setUp()` **and** `tearDown()` — otherwise worker mode leaks into later tests. Tests that go through the locale switcher also save and restore `\Locale::getDefault()`.
 - The `default` suite includes `tests/Integration`: `FiberIsolationKernelTest` boots a real FrameworkBundle + SecurityBundle kernel (`Integration/Symfony/App/TestKernel`) with `OxPHPBundle`, overlaps requests with `RequestFiber` (routes suspend on `?suspend=1`), and checks request stack, locale, login persistence, `logout_path()`, `kernel.reset` timing (also after a bailout, through `HttpKernelRunner` and the harness), a fiber the app creates inside a request, and stock behaviour outside worker mode. On http-kernel < 7.3 only the withholding and stock-behaviour tests run. Extend it, rather than the unit stubs, for anything that depends on how Symfony wires its services.
 - Test stubs in `tests/Stub/Apps/` (`FakeSymfonyKernel`, `FakeLaravelKernel`, `FakePsr15Handler`) are minimal — extend rather than replace when a runner test needs new behaviour.
+- `tests/Stub/Yii/` holds the Yii fixtures. `YiiFixture::config()` is a minimal web app as config groups (fed through `withConfig()`, no merge plan); `EventLog` is its event dispatcher and records every event by short class name, across all containers; `ErrorHandlerStack` puts PHPUnit's error and exception handlers (and `display_errors`) back after a test registers a Yii `ErrorHandler`, whose `unregister()` leaves its closures on the stack — without it the test is risky.
 
 ## Coding style
 
