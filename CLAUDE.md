@@ -43,6 +43,8 @@ When `oxphp_server_info()` is not declared (i.e. not running under the OxPHP SAP
 
 `onWorkerBoot()`/`onWorkerShutdown()` hooks exist on the abstract for subclasses, currently unused.
 
+**Boot-time `$_SERVER` carry-over.** OxPHP rebuilds `$_SERVER` for every worker request, but the boot (dotenv inside `SymfonyRuntime::__construct()`, `APP_ENV`/`APP_DEBUG`, the `index.php` callable) runs once. `Runtime` snapshots `$_SERVER` *before* `parent::__construct()` and passes the diff (`bootServerVars()`) to the worker runners, which do `$_SERVER += $bootServer` at the top of each iteration — the request's own values always win. It is a diff on purpose: the boot's `$_SERVER` is a synthetic request (`REQUEST_URI=/`, `REMOTE_ADDR=127.0.0.1`) that would otherwise leak into requests lacking those keys (`SUPERGLOBALS_ENABLED=false`). `$_ENV` is not touched — OxPHP 0.11.0+ pins it for the worker's life.
+
 ### Bridge
 
 `Internal\Bridge\OxPHP` is the only place that calls `oxphp_*()` functions for the runtime's own use (the runners still call a few directly — `oxphp_worker`, `oxphp_request_id`). When you need a new SAPI function, add a method here rather than scattering global function calls across runners.
@@ -71,7 +73,7 @@ When `oxphp_server_info()` is not declared (i.e. not running under the OxPHP SAP
 
 - `tests/bootstrap.php` declares polyfills only when the real `oxphp_sapi` extension isn't loaded.
 - `tests/polyfill/oxphp_http_interfaces.php` mirrors `oxphp.stub.php` from the oxphp server repo. **These signatures are duplicated, not generated — when the upstream stub changes, update this file in lockstep.**
-- `tests/Stub/OxPHPHarness` is a singleton that backs every `oxphp_*()` polyfill function. Tests `OxPHPHarness::reset()` between cases, then `setWorker()`/`pushRequest()`/`setCurrentRequest()` to script the SAPI behaviour, and read `flushCount()`/`finishCount()`/`capturedOutputs()`/`capturedStatuses()` for assertions. `driveWorker()` simulates the SAPI soft reset (each request starts at status 200; captures stdout and the final HTTP status per iteration).
+- `tests/Stub/OxPHPHarness` is a singleton that backs every `oxphp_*()` polyfill function. Tests `OxPHPHarness::reset()` between cases, then `setWorker()`/`pushRequest()`/`setCurrentRequest()` to script the SAPI behaviour, and read `flushCount()`/`finishCount()`/`capturedOutputs()`/`capturedStatuses()` for assertions. `driveWorker()` simulates the SAPI soft reset (each request starts at status 200; captures stdout and the final HTTP status per iteration; with `setRequestServer()`, each request also starts with that exact `$_SERVER`, and the real one is put back afterwards).
 - Test stubs in `tests/Stub/Apps/` (`FakeSymfonyKernel`, `FakeLaravelKernel`, `FakePsr15Handler`) are minimal — extend rather than replace when a runner test needs new behaviour.
 
 ## Coding style

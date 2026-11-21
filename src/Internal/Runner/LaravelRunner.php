@@ -27,8 +27,9 @@ final class LaravelRunner extends AbstractHttpRunner
         private readonly LaravelKernel $kernel,
         OxPHP $bridge,
         array $userResetters,
+        array $bootServer = [],
     ) {
-        parent::__construct($bridge, new ResetterChain($userResetters));
+        parent::__construct($bridge, new ResetterChain($userResetters), $bootServer);
         $this->emitter = new HttpFoundationResponseEmitter($bridge);
         $this->builder = new HttpFoundationRequestBuilder($bridge->serverSoftware());
     }

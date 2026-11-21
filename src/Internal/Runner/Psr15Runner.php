@@ -32,8 +32,9 @@ final class Psr15Runner extends AbstractHttpRunner
         OxPHP $bridge,
         private readonly Psr17FactoryLocator $locator,
         array $userResetters,
+        array $bootServer = [],
     ) {
-        parent::__construct($bridge, new ResetterChain($userResetters));
+        parent::__construct($bridge, new ResetterChain($userResetters), $bootServer);
         $this->emitter = new ResponseEmitter($bridge);
     }
 

@@ -66,6 +66,11 @@ the runtime side. In worker mode:
 - Between requests, OxPHP performs a **soft reset** (output buffers,
   headers, superglobals). Framework-specific state you want to reset on
   top of that goes through the resetter chain.
+- The `$_SERVER` entries written while the worker booted — `.env`
+  variables, `APP_ENV`, `APP_DEBUG` and anything your `index.php`
+  callable sets — are put back into every request's `$_SERVER`, never
+  overriding a value OxPHP set for that request. `$_ENV` needs no help:
+  OxPHP keeps it for the life of the worker.
 
 ## Resetters
 

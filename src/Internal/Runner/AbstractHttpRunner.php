@@ -17,9 +17,14 @@ use Symfony\Component\Runtime\RunnerInterface;
  */
 abstract class AbstractHttpRunner implements RunnerInterface
 {
+    /**
+     * @param array<array-key, mixed> $bootServer the $_SERVER entries the worker's
+     *        boot wrote (dotenv, APP_ENV, ...); see Runtime::bootServerVars()
+     */
     public function __construct(
         protected readonly OxPHP $bridge,
         protected readonly ResetterChain $resetters,
+        private readonly array $bootServer = [],
     ) {}
 
     public function run(): int
@@ -58,6 +63,10 @@ abstract class AbstractHttpRunner implements RunnerInterface
         // oxphp_worker() fallback.
         $this->bridge->serve(function (): void {
             try {
+                // The soft reset gave this request a $_SERVER of its own, which
+                // the boot never wrote into. Put the boot's entries back, never
+                // overriding what the server set for the request.
+                $_SERVER += $this->bootServer;
                 $this->handleRequest($this->bridge->currentRequest());
             } catch (\Throwable $e) {
                 $this->emitFallback500($e);

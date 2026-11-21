@@ -28,8 +28,15 @@ final class Runtime extends SymfonyRuntime
     /** @var list<ResetterInterface|callable> */
     private readonly array $userResetters;
 
+    /** @var array<array-key, mixed> $_SERVER as it stood before the boot wrote into it. */
+    private readonly array $serverBeforeBoot;
+
     public function __construct(array $options = [])
     {
+        // Taken before parent::__construct(), which is where dotenv boots.
+        // autoload_runtime.php writes these two just before constructing us;
+        // they are as much the boot's as what follows.
+        $this->serverBeforeBoot = \array_diff_key($_SERVER, ['APP_RUNTIME' => 0, 'APP_RUNTIME_OPTIONS' => 0]);
         parent::__construct($options + ['disable_dotenv' => true]);
         $this->bridge = new OxPHP();
         $this->psr17 = new Psr17FactoryLocator($options['psr17_factory'] ?? null);
@@ -55,15 +62,17 @@ final class Runtime extends SymfonyRuntime
      */
     private function resolveRunner(?object $application): RunnerInterface
     {
+        $bootServer = $this->bootServerVars();
+
         return match (true) {
             $application instanceof RequestHandlerInterface
-                => new Psr15Runner($application, $this->bridge, $this->psr17, $this->userResetters),
+                => new Psr15Runner($application, $this->bridge, $this->psr17, $this->userResetters, $bootServer),
 
             $application instanceof LaravelKernel
-                => new LaravelRunner($application, $this->bridge, $this->userResetters),
+                => new LaravelRunner($application, $this->bridge, $this->userResetters, $bootServer),
 
             $application instanceof HttpKernelInterface
-                => new HttpKernelRunner($application, $this->bridge, $this->userResetters),
+                => new HttpKernelRunner($application, $this->bridge, $this->userResetters, $bootServer),
 
             $application instanceof Response
                 => new HttpFoundationResponseRunner($application, $this->bridge),
@@ -78,5 +87,32 @@ final class Runtime extends SymfonyRuntime
                 \get_debug_type($application),
             )),
         };
+    }
+
+    /**
+     * The $_SERVER entries the worker's boot wrote — dotenv's variables,
+     * APP_ENV, APP_DEBUG, APP_PROJECT_DIR, whatever the index.php callable set.
+     * In worker mode the boot runs once, and OxPHP rebuilds $_SERVER for every
+     * request, so the worker runner puts these back into each one.
+     *
+     * A diff rather than the whole array: the boot's own $_SERVER is a synthetic
+     * request (REQUEST_URI "/", REMOTE_ADDR 127.0.0.1, ...) that must not stand
+     * in for keys a real request lacks. HTTP_* always describes the request.
+     *
+     * @return array<array-key, mixed>
+     */
+    private function bootServerVars(): array
+    {
+        $vars = [];
+        foreach ($_SERVER as $key => $value) {
+            if (\is_string($key) && \str_starts_with($key, 'HTTP_')) {
+                continue;
+            }
+            if (!\array_key_exists($key, $this->serverBeforeBoot) || $this->serverBeforeBoot[$key] !== $value) {
+                $vars[$key] = $value;
+            }
+        }
+
+        return $vars;
     }
 }
