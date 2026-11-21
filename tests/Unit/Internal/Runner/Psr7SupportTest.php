@@ -52,4 +52,19 @@ final class Psr7SupportTest extends TestCase
         self::assertSame(20_000, \array_sum($sizes));
         self::assertSame(8192, $sizes[0]);
     }
+
+    public function test_body_chunks_yields_nothing_for_a_body_that_cannot_be_read(): void
+    {
+        // As SapiEmitter: an unreadable body is not sent, rather than failing the response.
+        $path = (string) \tempnam(\sys_get_temp_dir(), 'oxphp-runtime-test');
+        $stream = new Psr17Factory()->createStreamFromFile($path, 'w');
+
+        try {
+            self::assertFalse($stream->isReadable());
+            self::assertSame([], \iterator_to_array(Psr7Support::bodyChunks($stream), false));
+        } finally {
+            $stream->close();
+            \unlink($path);
+        }
+    }
 }

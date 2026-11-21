@@ -196,4 +196,25 @@ final class Psr15RunnerTest extends TestCase
 
         return [$file->getClientFilename(), $file->getClientMediaType(), $file->getSize(), $file->getError(), (string) $file->getStream()];
     }
+
+    public function test_a_body_that_cannot_be_read_is_sent_empty_with_the_response_status(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true);
+        $h->pushRequest(FakeOxRequest::get('/'));
+        $path = (string) \tempnam(\sys_get_temp_dir(), 'oxphp-runtime-test');
+        $f = new Psr17Factory();
+        $handler = new FakePsr15Handler(
+            static fn (): ResponseInterface => $f->createResponse(201)->withBody($f->createStreamFromFile($path, 'w')),
+        );
+
+        try {
+            new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        } finally {
+            \unlink($path);
+        }
+
+        self::assertSame([201], $h->capturedStatuses());
+        self::assertSame([''], $h->capturedOutputs());
+    }
 }

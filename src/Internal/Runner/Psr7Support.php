@@ -44,9 +44,16 @@ final class Psr7Support
         return $req;
     }
 
-    /** @return \Generator<string> */
+    /**
+     * Yields nothing for a body that can't be read, as `SapiEmitter` sends none.
+     *
+     * @return \Generator<string>
+     */
     public static function bodyChunks(StreamInterface $body): \Generator
     {
+        if (!$body->isReadable()) {
+            return;
+        }
         if ($body->isSeekable()) {
             $body->rewind();
         }
