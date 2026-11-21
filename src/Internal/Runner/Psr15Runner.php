@@ -5,14 +5,12 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Internal\Runner;
 
 use OxPHP\Http\RequestInterface as OxRequest;
-use OxPHP\Http\UploadedFileInterface as OxUploadedFile;
 use OxPHP\Runtime\Internal\Bridge\OxPHP;
 use OxPHP\Runtime\Internal\Emitter\Psr17Factories;
 use OxPHP\Runtime\Internal\Emitter\Psr17FactoryLocator;
 use OxPHP\Runtime\Internal\Emitter\ResponseEmitter;
 use OxPHP\Runtime\Internal\Reset\ResetterChain;
 use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Message\UploadedFileInterface as PsrUploadedFile;
 use Psr\Http\Server\RequestHandlerInterface;
 
 /**
@@ -59,7 +57,7 @@ final class Psr15Runner extends AbstractHttpRunner
             ->withProtocolVersion($ox->httpProtocolVersion())
             ->withCookieParams($ox->cookies())
             ->withQueryParams($ox->query() ?? [])
-            ->withUploadedFiles($this->convertFiles($ox->files(), $f))
+            ->withUploadedFiles($this->convertFiles($_FILES ?? [], $f))
             ->withBody($f->stream->createStream($ox->body()))
             ->withAttribute('OXPHP_REQUEST_ID', \oxphp_request_id());
 
@@ -76,23 +74,61 @@ final class Psr15Runner extends AbstractHttpRunner
     }
 
     /**
-     * @param list<OxUploadedFile> $oxFiles
-     * @return array<string, PsrUploadedFile>
+     * Builds the PSR-7 uploaded files from $_FILES, keeping the form's field
+     * structure: `avatar`, `photos[]` and `user[avatar]` come out under
+     * ['avatar'], ['photos'][0] and ['user']['avatar']. OxPHP builds $_FILES
+     * even with SUPERGLOBALS_ENABLED=false; the request proxy's files() is a
+     * flat list without the field names.
+     *
+     * @param array<array-key, mixed> $files
+     * @return array<array-key, mixed>
      */
-    private function convertFiles(array $oxFiles, Psr17Factories $f): array
+    private function convertFiles(array $files, Psr17Factories $f): array
     {
         $out = [];
-        foreach ($oxFiles as $of) {
-            $stream = $f->stream->createStreamFromFile($of->tmpPath(), 'r');
-            $out[$of->name()] = $f->uploadedFile->createUploadedFile(
-                $stream,
-                $of->size(),
-                $of->error(),
-                $of->name(),
-                $of->clientType(),
-            );
+        foreach ($files as $field => $spec) {
+            if (\is_array($spec) && \array_key_exists('tmp_name', $spec)) {
+                $out[$field] = $this->convertFileSpec(
+                    $spec['tmp_name'],
+                    $spec['size'] ?? null,
+                    $spec['error'] ?? null,
+                    $spec['name'] ?? null,
+                    $spec['type'] ?? null,
+                    $f,
+                );
+            }
         }
         return $out;
+    }
+
+    /**
+     * One field of $_FILES. PHP files an array field as parallel trees, each
+     * tmp_name under the same keys as its size, error, name and type, so this
+     * walks tmp_name and takes the same key from the others.
+     */
+    private function convertFileSpec(mixed $tmpName, mixed $size, mixed $error, mixed $name, mixed $type, Psr17Factories $f): mixed
+    {
+        if (\is_array($tmpName)) {
+            $out = [];
+            foreach ($tmpName as $key => $sub) {
+                $out[$key] = $this->convertFileSpec($sub, $size[$key] ?? null, $error[$key] ?? null, $name[$key] ?? null, $type[$key] ?? null, $f);
+            }
+            return $out;
+        }
+
+        $error = \is_int($error) ? $error : \UPLOAD_ERR_NO_FILE;
+        // A file input left empty, or a failed upload, has no file to open.
+        $stream = $error === \UPLOAD_ERR_OK && \is_string($tmpName)
+            ? $f->stream->createStreamFromFile($tmpName, 'r')
+            : $f->stream->createStream();
+
+        return $f->uploadedFile->createUploadedFile(
+            $stream,
+            \is_int($size) ? $size : null,
+            $error,
+            \is_string($name) ? $name : null,
+            \is_string($type) ? $type : null,
+        );
     }
 
     /** @return \Generator<string> */

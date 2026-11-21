@@ -13,7 +13,7 @@ final class OxPHPHarness
 
     private bool $worker = false;
     private bool $streaming = false;
-    /** @var list<RequestInterface> */
+    /** @var list<array{RequestInterface, array<string, mixed>}> request and its $_FILES */
     private array $queue = [];
     private ?RequestInterface $current = null;
     private int $flushCount = 0;
@@ -95,9 +95,15 @@ final class OxPHPHarness
         return $this;
     }
 
-    public function pushRequest(RequestInterface $req): self
+    /**
+     * Queue a request for driveWorker(). It runs with $files as $_FILES, as
+     * OxPHP rebuilds $_FILES for every request; the real one is put back after.
+     *
+     * @param array<string, mixed> $files
+     */
+    public function pushRequest(RequestInterface $req, array $files = []): self
     {
-        $this->queue[] = $req;
+        $this->queue[] = [$req, $files];
         return $this;
     }
 
@@ -212,9 +218,11 @@ final class OxPHPHarness
         \http_response_code(200);
 
         $realServer = $_SERVER;
+        $realFiles = $_FILES;
         try {
-            foreach ($this->queue as $req) {
+            foreach ($this->queue as [$req, $files]) {
                 $this->current = $req;
+                $_FILES = $files;
                 if ($this->requestServer !== null) {
                     $_SERVER = $this->requestServer;
                 }
@@ -260,6 +268,7 @@ final class OxPHPHarness
             }
         } finally {
             $_SERVER = $realServer;
+            $_FILES = $realFiles;
         }
         $this->queue = [];
         $this->current = null;

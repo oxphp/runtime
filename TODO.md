@@ -40,7 +40,9 @@ Anything in this file is **explicitly out of v1 scope**.
   we throw `LogicException` with guidance to wrap it in a PSR-15 handler
   or HttpFoundation Response.
 - Global superglobal population when `SUPERGLOBALS_ENABLED=false`. The
-  runtime reads request data exclusively via `oxphp_http_request()`; user
-  code that still relies on `$_SERVER`/`$_GET`/`$_POST` must enable the
+  runtime reads request data via `oxphp_http_request()`, except uploaded
+  files: it reads those from `$_FILES`, which OxPHP builds even with the
+  flag off, because the request API's `files()` has no form field names.
+  User code that still relies on `$_SERVER`/`$_GET`/`$_POST` must enable the
   server-side flag itself.
 - ReactPHP / Swoole / RoadRunner compatibility. Those live in `php-runtime/*`.

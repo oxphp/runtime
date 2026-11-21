@@ -5,14 +5,16 @@ declare(strict_types=1);
 namespace OxPHP\Runtime\Internal\Runner;
 
 use OxPHP\Http\RequestInterface as OxRequest;
-use OxPHP\Http\UploadedFileInterface as OxUploadedFile;
-use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
  * @internal Builds a Symfony HttpFoundation Request from an OxPHP request
  * proxy without relying on the $_SERVER superglobal — OxPHP may be
  * configured to leave superglobals empty.
+ *
+ * Uploaded files are the exception: they come from $_FILES, which OxPHP
+ * builds even with SUPERGLOBALS_ENABLED=false. The request proxy's files()
+ * is a flat list without the form's field names.
  */
 final class HttpFoundationRequestBuilder
 {
@@ -29,7 +31,7 @@ final class HttpFoundationRequestBuilder
             request:    \is_array($ox->payload()) ? $ox->payload() : [],
             attributes: [],
             cookies:    $ox->cookies(),
-            files:      $this->convertFiles($ox->files()),
+            files:      $_FILES ?? [],
             server:     $server,
             content:    $ox->body(),
         );
@@ -70,24 +72,5 @@ final class HttpFoundationRequestBuilder
         $isDefault = ($ox->scheme() === 'http' && $port === 80)
                   || ($ox->scheme() === 'https' && $port === 443);
         return $ox->host() . ($isDefault ? '' : ':' . $port);
-    }
-
-    /**
-     * @param list<OxUploadedFile> $oxFiles
-     * @return array<string, UploadedFile>
-     */
-    private function convertFiles(array $oxFiles): array
-    {
-        $out = [];
-        foreach ($oxFiles as $of) {
-            $out[$of->name()] = new UploadedFile(
-                path: $of->tmpPath(),
-                originalName: $of->name(),
-                mimeType: $of->clientType(),
-                error: $of->error(),
-                test: true, // trust OxPHP's move semantics; no is_uploaded_file() check
-            );
-        }
-        return $out;
     }
 }

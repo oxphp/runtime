@@ -9,6 +9,7 @@ use OxPHP\Runtime\Internal\Runner\LaravelRunner;
 use OxPHP\Runtime\Tests\Stub\Apps\FakeLaravelKernel;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\UploadedFilesFixture;
 use PHPUnit\Framework\Attributes\RequiresMethod;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -18,14 +19,19 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 #[RequiresMethod(\Illuminate\Http\Request::class, 'createFromBase')]
 final class LaravelRunnerTest extends TestCase
 {
+    private UploadedFilesFixture $uploads;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
+        $this->uploads = new UploadedFilesFixture();
     }
 
     protected function tearDown(): void
     {
         OxPHPHarness::reset();
+        $_FILES = [];
+        $this->uploads->cleanUp();
     }
 
     public function test_handle_and_terminate_invoked_in_order(): void
@@ -114,5 +120,24 @@ final class LaravelRunnerTest extends TestCase
         self::assertSame(['lar:/a', 'lar:/b'], $h->capturedOutputs());
         self::assertSame(2, $kernel->terminated);
         self::assertSame(2, $resets);
+    }
+
+    public function test_uploaded_files_are_found_by_their_form_field_names(): void
+    {
+        $_FILES = $this->uploads->form();
+        OxPHPHarness::instance()->setCurrentRequest(new FakeOxRequest(method: 'POST', path: '/upload'));
+        $kernel = FakeLaravelKernel::echoingPath();
+
+        \ob_start();
+        new LaravelRunner($kernel, new OxPHP(), userResetters: [])->run();
+        \ob_end_clean();
+
+        $request = $kernel->handled[0];
+        self::assertSame('hello-avatar', \file_get_contents($request->file('avatar')->getPathname()));
+        self::assertSame('me.jpg', $request->file('avatar')->getClientOriginalName());
+        self::assertSame('photo-two', \file_get_contents($request->file('photos')[1]->getPathname()));
+        self::assertSame('nested-avatar', \file_get_contents($request->file('user.avatar')->getPathname()));
+        self::assertSame('deep-file', \file_get_contents($request->file('deep.a.b')->getPathname()));
+        self::assertFalse($request->hasFile('empty'));
     }
 }
