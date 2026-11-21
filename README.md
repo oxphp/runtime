@@ -361,7 +361,9 @@ state leak into another (or makes the second request fail). Every request
 therefore gets a new container, with its own instance of every service not
 listed in `sharedServices`, your own singletons included. The container is
 dropped when the request ends; it is never reused and never reset. On
-`yiisoft/app`'s home page that costs about 0.4 ms per request.
+`yiisoft/app`'s home page that costs about 0.4 ms per request. Overlapping
+requests need OxPHP 0.16.0 or later: 0.15.0 leaks the headers-sent state into
+requests that start while others are in flight.
 
 ### Lifecycle
 
