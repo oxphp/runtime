@@ -69,15 +69,15 @@ final class RequestScopesTest extends TestCase
         $owner = new \stdClass();
 
         $fiber = new \Fiber(static function () use ($owner): array {
-            RequestScopes::enterRequest();
+            $ticket = RequestScopes::enterRequest();
             $first = RequestScopes::current();
             $first->set($owner, 'x');
-            RequestScopes::leaveRequest();
+            RequestScopes::leaveRequest($ticket);
 
-            RequestScopes::enterRequest();
+            $ticket = RequestScopes::enterRequest();
             $second = RequestScopes::current();
             $value = $second->get($owner, static fn (): string => 'fresh');
-            RequestScopes::leaveRequest();
+            RequestScopes::leaveRequest($ticket);
 
             return [$first, $second, $value];
         });
@@ -165,25 +165,164 @@ final class RequestScopesTest extends TestCase
     {
         self::assertFalse(RequestScopes::isDegraded());
 
-        RequestScopes::enterRequest();
+        $ticket = RequestScopes::enterRequest();
 
         self::assertTrue(RequestScopes::isDegraded());
         self::assertSame(1, RequestScopes::inFlight());
 
-        RequestScopes::leaveRequest();
+        RequestScopes::leaveRequest($ticket);
 
+        self::assertSame(0, RequestScopes::inFlight());
+    }
+
+    public function test_a_degraded_ticket_closes_once_like_any_other(): void
+    {
+        $other = RequestFiber::start(static function (): void {
+            \Fiber::suspend();
+        });
+
+        $ticket = RequestScopes::enterRequest(); // from main: no current fiber
+
+        self::assertTrue(RequestScopes::isDegraded());
+        self::assertSame(2, RequestScopes::inFlight());
+
+        RequestScopes::leaveRequest($ticket);
+        RequestScopes::leaveRequest($ticket, atShutdown: true);
+
+        self::assertSame(1, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::hasBailedOut(), 'It was closed before its shutdown callback ran.');
+
+        $other->resume();
+
+        self::assertSame(0, RequestScopes::inFlight());
+    }
+
+    public function test_leaving_twice_with_one_ticket_counts_once(): void
+    {
+        $other = RequestFiber::start(static function (): void {
+            \Fiber::suspend();
+        });
+
+        $fiber = new \Fiber(static function (): void {
+            $ticket = RequestScopes::enterRequest();
+            RequestScopes::leaveRequest($ticket);
+            RequestScopes::leaveRequest($ticket);
+        });
+        $fiber->start();
+
+        self::assertSame(1, RequestScopes::inFlight(), 'The other request is still open.');
+
+        $other->resume();
+
+        self::assertSame(0, RequestScopes::inFlight());
+    }
+
+    public function test_leaving_unmaps_the_fiber(): void
+    {
+        $fiber = new \Fiber(static function (): array {
+            $ticket = RequestScopes::enterRequest();
+            $requestScope = RequestScopes::current();
+            RequestScopes::leaveRequest($ticket);
+
+            return [$requestScope, RequestScopes::current()];
+        });
+        $fiber->start();
+
+        [$requestScope, $afterLeave] = $fiber->getReturn();
+
+        self::assertNotSame($requestScope, $afterLeave, 'A closed request no longer resolves to its scope.');
+        self::assertNotSame(RequestScopes::current(), $afterLeave, 'Nor to the shared one: it fails closed.');
+    }
+
+    public function test_a_ticket_still_open_at_shutdown_marks_the_worker_bailed_out(): void
+    {
+        // The request ends without its finally (a fatal error, a time limit,
+        // exit(), a cancel, a client gone mid-stream); its shutdown callback runs.
+        $ticket = null;
+        $fiber = new \Fiber(static function () use (&$ticket): void {
+            $ticket = RequestScopes::enterRequest();
+            \Fiber::suspend();
+        });
+        $fiber->start();
+
+        self::assertSame(1, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::hasBailedOut());
+
+        \assert($ticket !== null);
+        RequestScopes::leaveRequest($ticket, atShutdown: true);
+
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertTrue(RequestScopes::hasBailedOut());
+
+        RequestScopes::leaveRequest($ticket);
+
+        self::assertSame(0, RequestScopes::inFlight(), 'A finally that runs after all closes nothing twice.');
+    }
+
+    public function test_a_ticket_closed_by_its_finally_is_not_a_bailout(): void
+    {
+        $fiber = new \Fiber(static function (): void {
+            $ticket = RequestScopes::enterRequest();
+
+            try {
+                // the request's work
+            } finally {
+                RequestScopes::leaveRequest($ticket);
+            }
+
+            // Its shutdown callback runs at the end of the request.
+            RequestScopes::leaveRequest($ticket, atShutdown: true);
+        });
+        $fiber->start();
+
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::hasBailedOut());
+    }
+
+    public function test_a_late_close_of_an_old_ticket_keeps_the_recycled_fibers_new_scope(): void
+    {
+        $owner = new \stdClass();
+
+        $fiber = new \Fiber(static function () use ($owner): array {
+            $old = RequestScopes::enterRequest(); // a request that never closed its ticket
+
+            $new = RequestScopes::enterRequest(); // the next request on the recycled fiber
+            $newScope = RequestScopes::current();
+            $newScope->set($owner, 'new');
+
+            RequestScopes::leaveRequest($old, atShutdown: true);
+
+            $stillNew = RequestScopes::current();
+            $inFlight = RequestScopes::inFlight();
+
+            RequestScopes::leaveRequest($new);
+
+            return [$newScope, $stillNew, $stillNew->get($owner, static fn (): string => 'lost'), $inFlight];
+        });
+        $fiber->start();
+
+        [$newScope, $stillNew, $value, $inFlight] = $fiber->getReturn();
+
+        self::assertSame($newScope, $stillNew);
+        self::assertSame('new', $value);
+        self::assertSame(1, $inFlight);
         self::assertSame(0, RequestScopes::inFlight());
     }
 
     public function test_reset_for_tests_clears_everything(): void
     {
+        $ticket = RequestScopes::enterRequest();
+        RequestScopes::leaveRequest($ticket, atShutdown: true);
         RequestScopes::enterRequest();
         $workerShared = RequestScopes::current();
+
+        self::assertTrue(RequestScopes::hasBailedOut());
 
         RequestScopes::resetForTests();
 
         self::assertSame(0, RequestScopes::inFlight());
         self::assertFalse(RequestScopes::isDegraded());
+        self::assertFalse(RequestScopes::hasBailedOut());
 
         $fromMain = RequestScopes::current();
         $fiber = new \Fiber(static fn (): RequestScope => RequestScopes::current());

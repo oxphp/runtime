@@ -14,6 +14,9 @@ use OxPHP\Server\Worker;
  */
 final class OxPHP
 {
+    /** @var (\Closure(\Closure): void)|null see replaceShutdownRegistrarForTests() */
+    private static ?\Closure $shutdownRegistrar = null;
+
     private readonly bool $useWorkerClass;
 
     /**
@@ -45,6 +48,37 @@ final class OxPHP
         }
 
         \oxphp_worker($handler);
+    }
+
+    /**
+     * Registers `$callback` to run when the current request ends.
+     *
+     * Inside a worker iteration OxPHP keeps shutdown functions per request and
+     * runs a request's own at its end, also when the request ends without
+     * unwinding (a fatal error, a time limit, `exit()`, a cancel, a client gone
+     * mid-stream), which skips its `finally` blocks.
+     */
+    public function registerRequestShutdown(\Closure $callback): void
+    {
+        if (self::$shutdownRegistrar !== null) {
+            (self::$shutdownRegistrar)($callback);
+
+            return;
+        }
+
+        \register_shutdown_function($callback);
+    }
+
+    /**
+     * Tests only: routes registerRequestShutdown() to `$registrar` instead of
+     * `register_shutdown_function()`, which in a test process would run once, at
+     * its exit. `null` restores the default.
+     *
+     * @param (\Closure(\Closure): void)|null $registrar
+     */
+    public static function replaceShutdownRegistrarForTests(?\Closure $registrar): void
+    {
+        self::$shutdownRegistrar = $registrar;
     }
 
     public function isStreaming(): bool

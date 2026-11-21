@@ -20,6 +20,11 @@ final class AbstractHttpRunnerTest extends TestCase
         OxPHPHarness::reset();
     }
 
+    protected function tearDown(): void
+    {
+        OxPHPHarness::reset();
+    }
+
     public function test_run_once_invokes_handle_request_and_returns_zero(): void
     {
         OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/x'));
@@ -205,6 +210,75 @@ final class AbstractHttpRunnerTest extends TestCase
 
         self::assertSame([1], $state);
         self::assertSame(0, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::hasBailedOut(), 'An exception unwinds through the finally.');
+    }
+
+    public function test_a_request_that_bails_out_still_closes_its_scope(): void
+    {
+        // OxPHP skips every finally of a request that hits a fatal error, a time
+        // limit, exit(), a cancel, or a client gone mid-stream, and still runs the
+        // request's shutdown functions.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true)->setBailoutMode(true);
+        $h->pushRequest(FakeOxRequest::get('/bail'));
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state): void {
+                if ($req->path() === '/bail') {
+                    \Fiber::suspend();
+                }
+
+                $state[] = RequestScopes::inFlight();
+            },
+            state: $state,
+        );
+
+        $runner->run();
+
+        self::assertSame(1, $h->bailouts());
+        self::assertSame([1, 1], $state, 'The requests after the bailout run alone.');
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertTrue(RequestScopes::hasBailedOut());
+    }
+
+    public function test_the_scope_closes_before_the_apps_own_shutdown_functions(): void
+    {
+        // The runner's close is the request's first shutdown function, so an app
+        // callback that calls exit() or throws can't skip it.
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true)->setBailoutMode(true);
+        $h->pushRequest(FakeOxRequest::get('/bail'));
+
+        $runner = $this->newRunner(
+            handler: static function (OxRequest $req, array &$state) use ($h): void {
+                $h->registerShutdown(static function () use (&$state): void {
+                    $state[] = RequestScopes::inFlight();
+                });
+
+                \Fiber::suspend();
+            },
+            state: $state,
+        );
+
+        $runner->run();
+
+        self::assertSame([0], $state);
+    }
+
+    public function test_requests_that_end_normally_never_mark_a_bailout(): void
+    {
+        $h = OxPHPHarness::instance();
+        $h->setWorker(true)->setBailoutMode(true);
+        $h->pushRequest(FakeOxRequest::get('/a'));
+        $h->pushRequest(FakeOxRequest::get('/b'));
+
+        $this->newRunner(handler: static function (): void {}, state: $state)->run();
+
+        self::assertSame(0, $h->bailouts());
+        self::assertSame(0, RequestScopes::inFlight());
+        self::assertFalse(RequestScopes::hasBailedOut());
     }
 
     /**

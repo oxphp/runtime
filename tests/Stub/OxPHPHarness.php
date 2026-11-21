@@ -27,14 +27,25 @@ final class OxPHPHarness
     private int $resetCount = 0;
     /** @var array<string, mixed>|null */
     private ?array $requestServer = null;
+    private bool $bailoutMode = false;
+    private int $bailouts = 0;
+    /** @var list<\Closure> shutdown callbacks of the iteration in progress; null between iterations */
+    private ?array $shutdownCallbacks = null;
+    /** @var list<\Fiber> requests that bailed out, kept so their `finally` blocks never run during the test */
+    private array $parked = [];
 
     public static function instance(): self
     {
         return self::$instance ??= new self();
     }
 
+    /**
+     * Starts over with a fresh harness. Requests parked by a bailout are released
+     * first, while the registry still holds their state; see releaseParked().
+     */
     public static function reset(): void
     {
+        self::$instance?->releaseParked();
         self::$instance = new self();
         RequestScopes::resetForTests();
     }
@@ -57,6 +68,18 @@ final class OxPHPHarness
     public function setWorkerId(int $id): self
     {
         $this->workerId = $id;
+        return $this;
+    }
+
+    /**
+     * In bailout mode, an iteration whose handler suspends its fiber plays a
+     * request OxPHP ended without unwinding it (a fatal error, a timeout,
+     * `exit()`, a cancel, a client gone mid-stream): none of its `finally` blocks
+     * run, its shutdown callbacks do, and the worker moves on to the next request.
+     */
+    public function setBailoutMode(bool $on): self
+    {
+        $this->bailoutMode = $on;
         return $this;
     }
 
@@ -132,6 +155,21 @@ final class OxPHPHarness
         $this->resetCount++;
     }
 
+    /**
+     * Backs the bridge's registerRequestShutdown() in tests (see bootstrap.php):
+     * the callback runs at the end of the iteration in progress, after the
+     * handler and its `finally` blocks, as OxPHP runs a request's own shutdown
+     * functions.
+     */
+    public function registerShutdown(\Closure $callback): void
+    {
+        if ($this->shutdownCallbacks === null) {
+            throw new \LogicException('registerShutdown() called outside a worker iteration');
+        }
+
+        $this->shutdownCallbacks[] = $callback;
+    }
+
     public function flushCount(): int
     {
         return $this->flushCount;
@@ -143,6 +181,12 @@ final class OxPHPHarness
     public function resetCount(): int
     {
         return $this->resetCount;
+    }
+
+    /** Number of iterations that bailed out (see setBailoutMode()). */
+    public function bailouts(): int
+    {
+        return $this->bailouts;
     }
 
     /** @return list<string> per-request captured stdout */
@@ -173,6 +217,8 @@ final class OxPHPHarness
                 if ($this->requestServer !== null) {
                     $_SERVER = $this->requestServer;
                 }
+                $this->shutdownCallbacks = [];
+                $level = \ob_get_level();
                 \ob_start();
                 try {
                     // OxPHP runs every worker iteration inside a fiber of its
@@ -180,9 +226,22 @@ final class OxPHPHarness
                     $fiber = new \Fiber($handler);
                     $fiber->start();
                     if (!$fiber->isTerminated()) {
-                        throw new \LogicException('handler suspended outside a RequestFiber scenario');
+                        // Kept, so the request's finally blocks don't run when the
+                        // fiber is destroyed; reset() releases it.
+                        $this->parked[] = $fiber;
+                        if (!$this->bailoutMode) {
+                            throw new \LogicException('handler suspended outside a RequestFiber scenario');
+                        }
+                        ++$this->bailouts;
                     }
+                    $this->runShutdownCallbacks();
                 } finally {
+                    $this->shutdownCallbacks = null;
+                    // A request that bailed out can leave buffers of its own open;
+                    // the end of the request flushes them into its output.
+                    while (\ob_get_level() > $level + 1) {
+                        \ob_end_flush();
+                    }
                     $this->outputs[] = (string) \ob_get_clean();
                     $this->statuses[] = (int) \http_response_code();
                     // Simulate server-side soft reset: fresh status for the next
@@ -197,5 +256,49 @@ final class OxPHPHarness
         $this->queue = [];
         $this->current = null;
         return true;
+    }
+
+    private function runShutdownCallbacks(): void
+    {
+        // A callback may register another one, which then runs too, as in PHP.
+        for ($i = 0; $i < \count($this->shutdownCallbacks ?? []); ++$i) {
+            ($this->shutdownCallbacks[$i])();
+        }
+    }
+
+    /**
+     * Destroys the parked fibers. Destroying a suspended fiber unwinds it, so the
+     * `finally` blocks of the request that bailed out run now: whatever they
+     * print, log or throw is discarded, so nothing leaks into the next test.
+     * Safe to call again; there is nothing left to release then.
+     */
+    private function releaseParked(): void
+    {
+        if ($this->parked === []) {
+            return;
+        }
+
+        $previousLog = \ini_get('error_log');
+        \ini_set('error_log', \PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null');
+        $level = \ob_get_level();
+        \ob_start();
+
+        try {
+            while ($this->parked !== []) {
+                $fiber = \array_pop($this->parked);
+
+                try {
+                    unset($fiber);
+                    \gc_collect_cycles();
+                } catch (\Throwable) {
+                    // The request's own cleanup failed; it has nowhere to go.
+                }
+            }
+        } finally {
+            while (\ob_get_level() > $level) {
+                \ob_end_clean();
+            }
+            \ini_set('error_log', $previousLog === false ? '' : $previousLog);
+        }
     }
 }

@@ -65,11 +65,19 @@ abstract class AbstractHttpRunner implements RunnerInterface
         //
         // OxPHP runs each iteration in a fiber of its own. The request scope is
         // opened first and closed last, after the resetters, so they still see
-        // their own request as in flight; `finally` closes it even when the
-        // handler throws, so a broken request never leaves a scope behind.
+        // their own request as in flight; `finally` closes it when the handler
+        // returns or throws. A request that ends in a fatal error, a time limit,
+        // exit(), a cancel or a client gone mid-stream skips every `finally`, but
+        // OxPHP still runs its shutdown functions: the same ticket is closed from
+        // one, registered first so the app's own can't skip it, and writing no
+        // output. Closing twice is a no-op; closing there marks the bailout.
         $this->bridge->serve(function (): void {
+            $ticket = RequestScopes::enterRequest();
+
             try {
-                RequestScopes::enterRequest();
+                $this->bridge->registerRequestShutdown(
+                    static fn () => RequestScopes::leaveRequest($ticket, atShutdown: true),
+                );
 
                 // The soft reset gave this request a $_SERVER of its own, which
                 // the boot never wrote into. Put the boot's entries back, never
@@ -82,7 +90,7 @@ abstract class AbstractHttpRunner implements RunnerInterface
                 try {
                     $this->resetters->reset();
                 } finally {
-                    RequestScopes::leaveRequest();
+                    RequestScopes::leaveRequest($ticket);
                 }
             }
         });

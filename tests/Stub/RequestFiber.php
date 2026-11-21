@@ -17,12 +17,12 @@ final class RequestFiber
     public static function start(\Closure $body): self
     {
         $fiber = new \Fiber(static function () use ($body): mixed {
-            RequestScopes::enterRequest();
+            $ticket = RequestScopes::enterRequest();
 
             try {
                 return $body();
             } finally {
-                RequestScopes::leaveRequest();
+                RequestScopes::leaveRequest($ticket);
             }
         });
 

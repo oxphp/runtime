@@ -78,4 +78,132 @@ final class OxPHPHarnessTest extends TestCase
         \oxphp_stream_flush();
         self::assertSame(2, $h->flushCount());
     }
+
+    public function test_shutdown_callbacks_run_at_the_end_of_their_own_iteration(): void
+    {
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true);
+        $harness->pushRequest(FakeOxRequest::get('/a'));
+        $harness->pushRequest(FakeOxRequest::get('/b'));
+
+        $log = [];
+        \oxphp_worker(static function () use ($harness, &$log): void {
+            $path = \oxphp_http_request()->path();
+
+            try {
+                $harness->registerShutdown(static function () use ($path, &$log): void {
+                    $log[] = 'shutdown:' . $path;
+                    echo '+shutdown';
+                });
+                $log[] = 'handler:' . $path;
+                echo 'out:' . $path;
+            } finally {
+                $log[] = 'finally:' . $path;
+            }
+        });
+
+        self::assertSame(
+            ['handler:/a', 'finally:/a', 'shutdown:/a', 'handler:/b', 'finally:/b', 'shutdown:/b'],
+            $log,
+        );
+        self::assertSame(['out:/a+shutdown', 'out:/b+shutdown'], $harness->capturedOutputs());
+        self::assertSame(0, $harness->bailouts());
+    }
+
+    public function test_registering_a_shutdown_callback_outside_an_iteration_is_refused(): void
+    {
+        $this->expectException(\LogicException::class);
+
+        OxPHPHarness::instance()->registerShutdown(static function (): void {});
+    }
+
+    public function test_a_suspend_in_bailout_mode_ends_the_request_without_its_finally(): void
+    {
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true)->setBailoutMode(true);
+        $harness->pushRequest(FakeOxRequest::get('/bail'));
+        $harness->pushRequest(FakeOxRequest::get('/ok'));
+
+        $log = [];
+        $level = \ob_get_level();
+        \oxphp_worker(static function () use ($harness, &$log): void {
+            $path = \oxphp_http_request()->path();
+            $harness->registerShutdown(static function () use ($path, &$log): void {
+                $log[] = 'shutdown:' . $path;
+            });
+
+            try {
+                echo 'out:' . $path;
+                if ($path === '/bail') {
+                    // A buffer the request leaves open must not unbalance the stack.
+                    \ob_start();
+                    echo '+partial';
+                    \Fiber::suspend();
+                }
+                $log[] = 'handler:' . $path;
+            } finally {
+                $log[] = 'finally:' . $path;
+                echo 'finally output';
+            }
+        });
+
+        self::assertSame(['shutdown:/bail', 'handler:/ok', 'finally:/ok', 'shutdown:/ok'], $log);
+        self::assertSame(['out:/bail+partial', 'out:/okfinally output'], $harness->capturedOutputs());
+        self::assertSame(1, $harness->bailouts());
+        self::assertSame($level, \ob_get_level());
+
+        // Releasing the parked request runs its finally, quietly and only once.
+        \ob_start();
+        OxPHPHarness::reset();
+        OxPHPHarness::reset();
+        $leaked = (string) \ob_get_clean();
+
+        self::assertSame('', $leaked);
+        self::assertSame(['shutdown:/bail', 'handler:/ok', 'finally:/ok', 'shutdown:/ok', 'finally:/bail'], $log);
+    }
+
+    public function test_releasing_a_parked_request_swallows_what_its_cleanup_throws_or_logs(): void
+    {
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true)->setBailoutMode(true);
+        $harness->pushRequest(FakeOxRequest::get('/bail'));
+
+        \oxphp_worker(static function (): void {
+            try {
+                \Fiber::suspend();
+            } finally {
+                \error_log('cleanup of a parked request');
+
+                throw new \RuntimeException('cleanup failed');
+            }
+        });
+
+        $logFile = (string) \tempnam(\sys_get_temp_dir(), 'oxphp-harness-');
+        $previousLog = \ini_get('error_log');
+        \ini_set('error_log', $logFile);
+
+        try {
+            OxPHPHarness::reset();
+            $logged = (string) \file_get_contents($logFile);
+        } finally {
+            \ini_set('error_log', $previousLog === false ? '' : $previousLog);
+            \unlink($logFile);
+        }
+
+        self::assertSame('', $logged);
+        self::assertSame(0, OxPHPHarness::instance()->bailouts());
+    }
+
+    public function test_a_suspend_outside_bailout_mode_still_throws(): void
+    {
+        $harness = OxPHPHarness::instance();
+        $harness->setWorker(true);
+        $harness->pushRequest(FakeOxRequest::get('/a'));
+
+        $this->expectException(\LogicException::class);
+
+        \oxphp_worker(static function (): void {
+            \Fiber::suspend();
+        });
+    }
 }

@@ -100,13 +100,13 @@ final class FiberScopedTokenStorageTest extends TestCase
         $alice = self::token('alice');
 
         $fiber = new \Fiber(static function () use ($storage, $alice): ?TokenInterface {
-            RequestScopes::enterRequest();
+            $ticket = RequestScopes::enterRequest();
             $storage->setToken($alice);
-            RequestScopes::leaveRequest();
+            RequestScopes::leaveRequest($ticket);
 
-            RequestScopes::enterRequest();
+            $ticket = RequestScopes::enterRequest();
             $token = $storage->getToken();
-            RequestScopes::leaveRequest();
+            RequestScopes::leaveRequest($ticket);
 
             return $token;
         });

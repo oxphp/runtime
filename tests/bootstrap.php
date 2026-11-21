@@ -55,4 +55,12 @@ if (!\function_exists('oxphp_http_request')) {
     {
         return OxPHPHarness::instance()->driveWorker($h);
     }
+
+    // A request's shutdown functions run at the end of that harness iteration,
+    // as OxPHP runs them, not once at the test process's exit.
+    OxPHP\Runtime\Internal\Bridge\OxPHP::replaceShutdownRegistrarForTests(
+        static function (Closure $callback): void {
+            OxPHPHarness::instance()->registerShutdown($callback);
+        },
+    );
 }

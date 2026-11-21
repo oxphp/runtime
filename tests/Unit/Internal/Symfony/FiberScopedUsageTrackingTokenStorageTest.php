@@ -110,16 +110,16 @@ final class FiberScopedUsageTrackingTokenStorageTest extends TestCase
         $second = self::requestWithSession($usageSecond);
 
         $fiber = new \Fiber(static function () use ($requests, $storage, $first, $second): void {
-            RequestScopes::enterRequest();
+            $ticket = RequestScopes::enterRequest();
             $requests->push($first);
             $storage->enableUsageTracking();
             $storage->getToken();
-            RequestScopes::leaveRequest();
+            RequestScopes::leaveRequest($ticket);
 
-            RequestScopes::enterRequest();
+            $ticket = RequestScopes::enterRequest();
             $requests->push($second);
             $storage->getToken();
-            RequestScopes::leaveRequest();
+            RequestScopes::leaveRequest($ticket);
         });
         $fiber->start();
 
