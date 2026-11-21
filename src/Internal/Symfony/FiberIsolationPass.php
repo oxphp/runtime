@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OxPHP\Runtime\Internal\Symfony;
 
+use Symfony\Bundle\FrameworkBundle\Translation\Translator as FrameworkTranslator;
 use Symfony\Component\DependencyInjection\ChildDefinition;
 use Symfony\Component\DependencyInjection\Compiler\CompilerPassInterface;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
@@ -21,18 +22,17 @@ use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\UsageTrackingTokenStorage;
 use Symfony\Component\Security\Http\Logout\LogoutUrlGenerator;
 use Symfony\Component\Translation\LocaleSwitcher;
-use Symfony\Component\Translation\TranslatorBagInterface;
-use Symfony\Contracts\Translation\LocaleAwareInterface;
-use Symfony\Contracts\Translation\TranslatorInterface;
+use Symfony\Component\Translation\Translator;
 
 /**
  * @internal Swaps Symfony's shared per-request services for their per-request (fiber-scoped) versions.
  *
  * All or nothing: the pass first collects every reason a present service can't be
- * scoped safely (a custom class `setClass()` would clobber, a public method the
- * scoped class doesn't declare on this Symfony version, a context listener without
- * SecurityBundle's static response listener, a `services_resetter` class that
- * implements neither `ServicesResetterInterface`, symfony/http-kernel < 7.3). With any
+ * scoped safely (a custom class `setClass()` would clobber or a decorator would
+ * hide, a `translator` alias of anything but `translator.default`, a public method
+ * the scoped class doesn't declare on this Symfony version, a context listener
+ * without SecurityBundle's static response listener, a `services_resetter` class
+ * that implements neither `ServicesResetterInterface`, symfony/http-kernel < 7.3). With any
  * reason it changes nothing, sets `oxphp_runtime.fiber_isolation` to `false` and
  * records the reasons in `oxphp_runtime.fiber_isolation_reason` and the container
  * log, so the runner keeps its full teardown. Otherwise it installs every scoped
@@ -69,10 +69,15 @@ final class FiberIsolationPass implements CompilerPassInterface
         'translation.locale_switcher' => [LocaleSwitcher::class, FiberScopedLocaleSwitcher::class, []],
     ];
 
-    private const array TRANSLATOR_INTERFACES = [
-        TranslatorInterface::class,
-        TranslatorBagInterface::class,
-        LocaleAwareInterface::class,
+    /**
+     * The classes `translator.default` may have: FrameworkBundle's and the one it
+     * extends. The decorator hides whatever else a custom class adds.
+     *
+     * @var list<class-string>
+     */
+    private const array TRANSLATOR_CLASSES = [
+        FrameworkTranslator::class,
+        Translator::class,
     ];
 
     public function process(ContainerBuilder $container): void
@@ -163,6 +168,14 @@ final class FiberIsolationPass implements CompilerPassInterface
             return self::aliasReasons($container, $id);
         }
 
+        $class = self::classOf($container, $id);
+
+        // Decorated rather than replaced: a subclass would be hidden behind a plain
+        // context, its own state and methods with it.
+        if ($class !== RequestContext::class) {
+            return [\sprintf('service "%s" uses %s instead of %s', $id, $class ?? 'no class', RequestContext::class)];
+        }
+
         if (!\class_exists(RequestContext::class)) {
             return [\sprintf('service "%s" cannot be scoped: %s does not exist', $id, RequestContext::class)];
         }
@@ -216,14 +229,40 @@ final class FiberIsolationPass implements CompilerPassInterface
             return [\sprintf('service "%s" has no class', $id)];
         }
 
+        // Decorated rather than replaced, like the request context.
+        if (!\in_array($class, self::TRANSLATOR_CLASSES, true)) {
+            return [\sprintf('service "%s" uses %s instead of %s', $id, $class, \implode(' or ', self::TRANSLATOR_CLASSES))];
+        }
+
         if (!\class_exists($class)) {
             return [\sprintf('service "%s" uses %s, which does not exist', $id, $class)];
         }
 
-        foreach (self::TRANSLATOR_INTERFACES as $interface) {
-            if (!\is_a($class, $interface, true)) {
-                return [\sprintf('service "%s" uses %s, which does not implement all of %s, %s and %s', $id, $class, ...self::TRANSLATOR_INTERFACES)];
-            }
+        return self::translatorAlias($container);
+    }
+
+    /**
+     * FrameworkBundle aliases `translator`, which most services are injected with,
+     * to `translator.default`. Anything else would leave them a translator with a
+     * shared locale. Before optimization the alias is not yet re-pointed at the
+     * decorators FrameworkBundle adds in debug mode, which decorate it.
+     *
+     * @return list<string>
+     */
+    private static function translatorAlias(ContainerBuilder $container): array
+    {
+        $id = 'translator';
+
+        if ($container->hasAlias($id)) {
+            $target = (string) $container->getAlias($id);
+
+            return $target === 'translator.default'
+                ? []
+                : [\sprintf('service "%s" is an alias of "%s" instead of "translator.default"', $id, $target)];
+        }
+
+        if ($container->hasDefinition($id)) {
+            return [\sprintf('service "%s" is a definition of its own instead of an alias of "translator.default"', $id)];
         }
 
         return [];
@@ -390,10 +429,9 @@ final class FiberIsolationPass implements CompilerPassInterface
         // `TranslationDebugCommand` loads fallback catalogues only for a concrete
         // `Translator`, `DataCollectorTranslator` or `LoggingTranslator`. Give it the
         // stock translator under the decorator, so `debug:translation --no-debug`
-        // still shows them. Left alone when `translator` isn't FrameworkBundle's.
-        if (!$container->hasDefinition('console.command.translation_debug')
-            || !$container->hasAlias('translator')
-            || (string) $container->getAlias('translator') !== 'translator.default') {
+        // still shows them. A `translator` alias reaching here targets
+        // `translator.default` (see `translatorAlias()`).
+        if (!$container->hasDefinition('console.command.translation_debug') || !$container->hasAlias('translator')) {
             return;
         }
 

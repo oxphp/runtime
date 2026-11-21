@@ -21,11 +21,13 @@ use OxPHP\Runtime\Tests\Stub\ServicesResetter\BothInterfacesResetter;
 use OxPHP\Runtime\Tests\Stub\ServicesResetter\DependencyInjectionResetter;
 use OxPHP\Runtime\Tests\Stub\ServicesResetter\HttpKernelResetter;
 use OxPHP\Runtime\Tests\Stub\ServicesResetter\PlainResetter;
+use OxPHP\Runtime\Tests\Stub\TenantRequestContext;
 use OxPHP\Runtime\Tests\Stub\TranslatorConsumer;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\IgnoreDeprecations;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
+use Symfony\Bundle\FrameworkBundle\Translation\Translator as FrameworkTranslator;
 use Symfony\Component\DependencyInjection\Argument\IteratorArgument;
 use Symfony\Component\DependencyInjection\Argument\ServiceLocatorArgument;
 use Symfony\Component\DependencyInjection\Argument\TaggedIteratorArgument;
@@ -43,6 +45,7 @@ use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\UsageTrackingTokenStorage;
 use Symfony\Component\Security\Http\Firewall\ContextListener;
 use Symfony\Component\Security\Http\Logout\LogoutUrlGenerator;
+use Symfony\Component\Translation\DataCollectorTranslator;
 use Symfony\Component\Translation\LocaleSwitcher;
 use Symfony\Component\Translation\Translator;
 
@@ -176,7 +179,7 @@ final class FiberIsolationPassTest extends TestCase
         self::assertSame(
             'service "request_stack" uses ArrayObject instead of Symfony\Component\HttpFoundation\RequestStack; '
             . 'service "security.untracked_token_storage" uses ArrayObject instead of Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage; '
-            . 'service "translator.default" uses ArrayObject, which does not implement all of Symfony\Contracts\Translation\TranslatorInterface, Symfony\Component\Translation\TranslatorBagInterface and Symfony\Contracts\Translation\LocaleAwareInterface',
+            . 'service "translator.default" uses ArrayObject instead of Symfony\Bundle\FrameworkBundle\Translation\Translator or Symfony\Component\Translation\Translator',
             $c->getParameter('oxphp_runtime.fiber_isolation_reason'),
         );
     }
@@ -297,8 +300,13 @@ final class FiberIsolationPassTest extends TestCase
 
         new FiberIsolationPass()->process($c);
 
+        self::assertTrue($c->getParameter('oxphp_runtime.fiber_isolation'));
         self::assertSame(['app.translator'], self::referenceIds($c->getDefinition('console.command.translation_debug')->getArguments()));
+    }
 
+    public function test_a_translator_alias_of_another_service_withholds_isolation(): void
+    {
+        // Everything injected with `translator` would keep a shared locale.
         $c = self::stockContainer();
         $c->register('app.translator', Translator::class)->setArguments(['en']);
         $c->setAlias('translator', 'app.translator')->setPublic(true);
@@ -307,8 +315,75 @@ final class FiberIsolationPassTest extends TestCase
 
         new FiberIsolationPass()->process($c);
 
-        self::assertTrue($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertFalse($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame(
+            'service "translator" is an alias of "app.translator" instead of "translator.default"',
+            $c->getParameter('oxphp_runtime.fiber_isolation_reason'),
+        );
+        self::assertFalse($c->hasDefinition('oxphp_runtime.translator'));
         self::assertSame(['translator'], self::referenceIds($c->getDefinition('console.command.translation_debug')->getArguments()));
+    }
+
+    public function test_a_translator_defined_as_a_service_of_its_own_withholds_isolation(): void
+    {
+        $c = self::stockContainer();
+        $c->register('translator', Translator::class)->setArguments(['en']);
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertFalse($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame(
+            'service "translator" is a definition of its own instead of an alias of "translator.default"',
+            $c->getParameter('oxphp_runtime.fiber_isolation_reason'),
+        );
+    }
+
+    public function test_a_translator_class_other_than_symfonys_withholds_isolation(): void
+    {
+        // It implements every translator interface, and still keeps what the scoped
+        // decorator would hide from everything injected with it.
+        $c = self::stockContainer();
+        $c->register('app.inner_translator', Translator::class)->setArguments(['en']);
+        $c->getDefinition('translator.default')
+            ->setClass(DataCollectorTranslator::class)
+            ->setArguments([new Reference('app.inner_translator')]);
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertFalse($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame(
+            'service "translator.default" uses Symfony\Component\Translation\DataCollectorTranslator instead of '
+            . 'Symfony\Bundle\FrameworkBundle\Translation\Translator or Symfony\Component\Translation\Translator',
+            $c->getParameter('oxphp_runtime.fiber_isolation_reason'),
+        );
+        self::assertFalse($c->hasDefinition('oxphp_runtime.translator'));
+    }
+
+    public function test_frameworkbundles_translator_class_is_scoped(): void
+    {
+        $c = self::stockContainer();
+        $c->getDefinition('translator.default')->setClass(FrameworkTranslator::class);
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertTrue($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertTrue($c->hasDefinition('oxphp_runtime.translator'));
+    }
+
+    public function test_a_custom_request_context_class_withholds_isolation(): void
+    {
+        // Decorating it would hide the app's own context behind a plain one.
+        $c = self::stockContainer();
+        $c->getDefinition('router.request_context')->setClass(TenantRequestContext::class);
+
+        new FiberIsolationPass()->process($c);
+
+        self::assertFalse($c->getParameter('oxphp_runtime.fiber_isolation'));
+        self::assertSame(
+            'service "router.request_context" uses ' . TenantRequestContext::class . ' instead of Symfony\Component\Routing\RequestContext',
+            $c->getParameter('oxphp_runtime.fiber_isolation_reason'),
+        );
+        self::assertFalse($c->hasDefinition('oxphp_runtime.request_context'));
     }
 
     public function test_an_aliased_service_withholds_isolation(): void
