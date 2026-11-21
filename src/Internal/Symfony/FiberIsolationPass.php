@@ -8,10 +8,13 @@ use Symfony\Component\DependencyInjection\ChildDefinition;
 use Symfony\Component\DependencyInjection\Compiler\CompilerPassInterface;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
+use Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException;
+use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
 use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\DependencyInjection\ServicesResetterInterface;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\HttpKernel\DependencyInjection\ServicesResetterInterface as LegacyServicesResetterInterface;
+use Symfony\Component\HttpKernel\Kernel;
 use Symfony\Component\HttpKernel\KernelEvents;
 use Symfony\Component\Routing\RequestContext;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
@@ -72,17 +75,15 @@ final class FiberIsolationPass implements CompilerPassInterface
 
     public function process(ContainerBuilder $container): void
     {
-        // Must stay first. Each guard implements one of these interfaces, and the
-        // checks below autoload and reflect the scoped classes: on http-kernel < 7.3
-        // none of them may be touched. DependencyInjection's interface is checked
-        // first: from 8.1 autoloading HttpKernel's triggers a deprecation. The guard
-        // picked here is only kept for an aliased `services_resetter`; for a
-        // definition, `servicesResetter()` picks it by the class.
-        if (\interface_exists(ServicesResetterInterface::class)) {
-            $resetter = GuardedServicesResetter::class;
-        } elseif (\interface_exists(LegacyServicesResetterInterface::class)) {
-            $resetter = LegacyGuardedServicesResetter::class;
-        } else {
+        // Must stay first: the checks below autoload and reflect the scoped classes,
+        // and on http-kernel < 7.3 none of them may be touched. The version is read
+        // from `Kernel` because DependencyInjection 8.1 installs alongside any
+        // http-kernel from 6.4. Each guard implements one of the two interfaces;
+        // DependencyInjection's is checked first, since from 8.1 autoloading
+        // HttpKernel's triggers a deprecation.
+        if (!\class_exists(Kernel::class)
+            || Kernel::VERSION_ID < 70300
+            || (!\interface_exists(ServicesResetterInterface::class) && !\interface_exists(LegacyServicesResetterInterface::class))) {
             $this->withhold($container, ['symfony/http-kernel 7.3 or later is required']);
 
             return;
@@ -229,23 +230,28 @@ final class FiberIsolationPass implements CompilerPassInterface
      * is the type the guard must keep for whatever is wired with that service.
      * `is_a()` doesn't autoload the interface, so on http-kernel 8.1 HttpKernel's
      * deprecated one stays unloaded: DependencyInjection's `ServicesResetter` doesn't
-     * implement it. An alias or a missing service leaves `$resetter` as it is.
+     * implement it. An alias is followed to its definition, which `DecoratorServicePass`
+     * decorates. A missing service, or an alias that resolves to none, leaves
+     * `$resetter` `null`: there is nothing to decorate.
      *
-     * @param class-string<AbstractGuardedServicesResetter> $resetter
-     *
-     * @param-out class-string<AbstractGuardedServicesResetter> $resetter
+     * @param-out class-string<AbstractGuardedServicesResetter>|null $resetter
      *
      * @return list<string>
      */
-    private static function servicesResetter(ContainerBuilder $container, string &$resetter): array
+    private static function servicesResetter(ContainerBuilder $container, ?string &$resetter): array
     {
         $id = 'services_resetter';
+        $resetter = null;
 
-        if (!$container->hasDefinition($id)) {
+        if (!$container->hasDefinition($id) && !$container->hasAlias($id)) {
             return [];
         }
 
-        $class = self::classOf($container, $id);
+        try {
+            $class = self::classOf($container, $id);
+        } catch (ServiceCircularReferenceException|ServiceNotFoundException) {
+            return [];
+        }
 
         if ($class === null) {
             return [\sprintf('service "%s" has no class', $id)];
@@ -315,15 +321,15 @@ final class FiberIsolationPass implements CompilerPassInterface
 
     private static function classOf(ContainerBuilder $container, string $id): ?string
     {
-        $class = $container->getParameterBag()->resolveValue($container->getDefinition($id)->getClass());
+        $class = $container->getParameterBag()->resolveValue($container->findDefinition($id)->getClass());
 
         return \is_string($class) ? $class : null;
     }
 
     /**
-     * @param class-string<AbstractGuardedServicesResetter> $resetter
+     * @param class-string<AbstractGuardedServicesResetter>|null $resetter the `services_resetter` guard, `null` for none
      */
-    private static function install(ContainerBuilder $container, string $resetter): void
+    private static function install(ContainerBuilder $container, ?string $resetter): void
     {
         foreach (self::REPLACED as $id => [, $scoped]) {
             if ($container->hasDefinition($id)) {
@@ -342,7 +348,7 @@ final class FiberIsolationPass implements CompilerPassInterface
             self::installTranslator($container);
         }
 
-        if ($container->has('services_resetter')) {
+        if ($resetter !== null) {
             // `ResettableServicePass` (HttpKernel's, DependencyInjection's from 8.1)
             // removes `services_resetter` later when nothing is tagged `kernel.reset`;
             // the decorator then goes with it.
