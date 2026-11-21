@@ -129,15 +129,21 @@ final class ContainerReferenceFinder
             $children[] = [$path . '->' . ($separator === false ? $name : \substr($name, $separator + 1)), $value];
         }
 
+        // The walk must neither run user code nor move an iterator. So the elements of these
+        // classes aren't read by iterating or through an overridable method: they come from a
+        // method of the internal base class, called on the object with ReflectionMethod::invoke()
+        // (which doesn't dispatch virtually, so a subclass override doesn't run).
         if ($object instanceof \ArrayObject || $object instanceof \ArrayIterator) {
             // Their elements aren't properties.
-            $children = [...$children, ...self::arrayChildren($path, $object->getArrayCopy(), $seenReferences)];
+            $base = $object instanceof \ArrayObject ? \ArrayObject::class : \ArrayIterator::class;
+            $elements = new \ReflectionMethod($base, 'getArrayCopy')->invoke($object);
+            $children = [...$children, ...self::arrayChildren($path, $elements, $seenReferences)];
         } elseif ($object instanceof \SplObjectStorage) {
-            $n = 0;
-            foreach ($object as $entry) {
+            // Returns `[[obj, data, obj, data, ...], members]` and leaves the internal pointer alone.
+            $entries = new \ReflectionMethod(\SplObjectStorage::class, '__serialize')->invoke($object)[0];
+            foreach (\array_chunk($entries, 2) as $n => [$entry, $data]) {
                 $children[] = [$path . '[#' . $n . ']', $entry];
-                $children[] = [$path . '[#' . $n . ' data]', $object[$entry]];
-                ++$n;
+                $children[] = [$path . '[#' . $n . ' data]', $data];
             }
         } elseif ($object instanceof \WeakMap) {
             $n = 0;

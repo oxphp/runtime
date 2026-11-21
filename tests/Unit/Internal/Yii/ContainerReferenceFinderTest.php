@@ -121,6 +121,53 @@ final class ContainerReferenceFinderTest extends TestCase
         );
     }
 
+    public function test_does_not_move_the_internal_pointer_of_an_spl_object_storage(): void
+    {
+        $first = new \stdClass();
+        $second = new \stdClass();
+        $storage = new \SplObjectStorage();
+        $storage[$first] = 'a';
+        $storage[$second] = 'b';
+        $storage->rewind();
+        $storage->next();
+
+        self::assertNull(ContainerReferenceFinder::find(new class ($storage) {
+            public function __construct(public readonly \SplObjectStorage $storage) {}
+        }));
+
+        self::assertTrue($storage->valid());
+        self::assertSame(1, $storage->key());
+        self::assertSame($second, $storage->current());
+        self::assertSame('b', $storage->getInfo());
+    }
+
+    public function test_does_not_run_overridden_methods_of_an_spl_object_storage_subclass(): void
+    {
+        $storage = new RecordingStorage();
+        $storage[new \stdClass()] = ['k' => new Container()];
+
+        self::assertSame(
+            ['path' => "->storage[#0 data]['k']", 'class' => Container::class],
+            ContainerReferenceFinder::find(new class ($storage) {
+                public function __construct(public readonly RecordingStorage $storage) {}
+            }),
+        );
+        self::assertSame([], $storage->calls);
+    }
+
+    public function test_does_not_run_an_overridden_get_array_copy(): void
+    {
+        $bag = new RecordingArrayObject(['c' => new Container()]);
+
+        self::assertSame(
+            ['path' => "->bag['c']", 'class' => Container::class],
+            ContainerReferenceFinder::find(new class ($bag) {
+                public function __construct(public readonly RecordingArrayObject $bag) {}
+            }),
+        );
+        self::assertSame([], $bag->calls);
+    }
+
     public function test_finds_a_container_in_a_weak_map(): void
     {
         $key = new \stdClass();
@@ -252,6 +299,89 @@ class Holder
 class ContainerOwner
 {
     public function __construct(private readonly Container $container) {}
+}
+
+/**
+ * Records every call to a method the walk could trigger by iterating the storage.
+ */
+class RecordingStorage extends \SplObjectStorage
+{
+    /** @var list<string> */
+    public array $calls = [];
+
+    public function rewind(): void
+    {
+        $this->calls[] = 'rewind';
+        parent::rewind();
+    }
+
+    public function valid(): bool
+    {
+        $this->calls[] = 'valid';
+
+        return parent::valid();
+    }
+
+    public function key(): int
+    {
+        $this->calls[] = 'key';
+
+        return parent::key();
+    }
+
+    public function current(): object
+    {
+        $this->calls[] = 'current';
+
+        return parent::current();
+    }
+
+    public function next(): void
+    {
+        $this->calls[] = 'next';
+        parent::next();
+    }
+
+    public function getInfo(): mixed
+    {
+        $this->calls[] = 'getInfo';
+
+        return parent::getInfo();
+    }
+
+    public function offsetGet(mixed $object): mixed
+    {
+        $this->calls[] = 'offsetGet';
+
+        return parent::offsetGet($object);
+    }
+
+    public function __serialize(): array
+    {
+        $this->calls[] = '__serialize';
+
+        return parent::__serialize();
+    }
+
+    public function __debugInfo(): array
+    {
+        $this->calls[] = '__debugInfo';
+
+        return parent::__debugInfo();
+    }
+}
+
+class RecordingArrayObject extends \ArrayObject
+{
+    /** @var list<string> */
+    public array $calls = [];
+
+    public function getArrayCopy(): array
+    {
+        $this->calls[] = 'getArrayCopy';
+
+        return parent::getArrayCopy();
+    }
 }
 
 enum Suit
