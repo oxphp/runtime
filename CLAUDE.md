@@ -71,6 +71,8 @@ Uploaded files are the one exception: both builders read `$_FILES`, which OxPHP 
 
 `Internal\Runner\HttpFoundationResponseEmitter` is the one place that maps Symfony response shapes onto emitter calls; `HttpKernelRunner`, `LaravelRunner`, and `HttpFoundationResponseRunner` all delegate to it rather than duplicating the streamed/non-streamed branch.
 
+**Headers PHP already queued** (the app's `header()` calls, the session cache limiter) meet the response's in `sendHeaders()`. `Psr15Runner` and `Psr7ResponseRunner` build the emitter with `replaceHeaders: true`, as Laminas' `SapiEmitter` and Slim's emitter work: each header's first value replaces the queued one, the others are added, and `Set-Cookie` never replaces. That keeps the native session cookie, so don't `header_remove()` there. HttpFoundation responses add every value (the default), as Symfony's `Response::sendHeaders()` does for all but `Content-Type`. The Yii runner calls `header_remove()` first, as Yii's `SapiEmitter` does.
+
 ### Resetters
 
 `ResetterChain` runs each resetter in a try/catch — a faulty resetter is logged via `error_log()` but never aborts the chain (workers must always reach a clean state). User resetters come from the `resetters` runtime option and run after every request, even while other requests are in flight. `HttpKernelRunner` automatically prepends `SymfonyContainerResetter` to the chain when the kernel is a full `Symfony\Component\HttpKernel\Kernel`. Laravel users get no built-in resetters — Octane-style flush of singletons/DB connections is up to user code.

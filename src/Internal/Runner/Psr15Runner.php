@@ -34,7 +34,7 @@ final class Psr15Runner extends AbstractHttpRunner
         array $bootServer = [],
     ) {
         parent::__construct($bridge, new ResetterChain($userResetters), $bootServer);
-        $this->emitter = new ResponseEmitter($bridge);
+        $this->emitter = new ResponseEmitter($bridge, replaceHeaders: true);
     }
 
     protected function handleRequest(OxRequest $req): void

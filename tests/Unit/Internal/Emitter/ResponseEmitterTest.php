@@ -157,6 +157,78 @@ final class ResponseEmitterTest extends TestCase
         self::assertSame('', $r['stderr']);
     }
 
+    public function test_a_replacing_emitter_sends_one_copy_of_a_header_the_app_queued_the_responses(): void
+    {
+        $r = self::runUnderPhpCgi('replaceHeadersTheAppQueued');
+
+        self::assertSame('', $r['stderr']);
+        self::assertSame(['public, max-age=60'], self::headerValues($r['headers'], 'Cache-Control'));
+        self::assertSame(['SAMEORIGIN'], self::headerValues($r['headers'], 'X-Frame-Options'));
+    }
+
+    public function test_a_replacing_emitter_sends_every_value_of_a_multi_value_header(): void
+    {
+        $r = self::runUnderPhpCgi('replaceWithMultiValueHeaders');
+
+        self::assertSame('', $r['stderr']);
+        // The first value replaced the app's Vary; the others were added after it.
+        self::assertSame(['Accept', 'Accept-Encoding'], self::headerValues($r['headers'], 'Vary'));
+        self::assertSame(
+            ['</app.css>; rel=preload; as=style', '</app.js>; rel=preload; as=script'],
+            self::headerValues($r['headers'], 'Link'),
+        );
+    }
+
+    public function test_a_replacing_emitter_keeps_the_cookie_the_app_set_natively(): void
+    {
+        $r = self::runUnderPhpCgi('replaceNextToANativeCookie');
+
+        self::assertSame('', $r['stderr']);
+        self::assertSame(['native=1', 'theme=dark', 'lang=en'], self::headerValues($r['headers'], 'Set-Cookie'));
+    }
+
+    /**
+     * Run under php-cgi by the test above: the app queued a Cache-Control and an
+     * X-Frame-Options with header(), and the response carries its own.
+     */
+    public static function replaceHeadersTheAppQueued(): void
+    {
+        \header('Cache-Control: no-store, no-cache, must-revalidate');
+        \header('X-Frame-Options: DENY');
+
+        new ResponseEmitter(new OxPHP(), replaceHeaders: true)->emit(
+            200,
+            ['Cache-Control' => ['public, max-age=60'], 'X-Frame-Options' => ['SAMEORIGIN']],
+            'ok',
+        );
+    }
+
+    /**
+     * Run under php-cgi by the test above: the app queued a Vary, and the response
+     * carries two Vary values and two Link values.
+     */
+    public static function replaceWithMultiValueHeaders(): void
+    {
+        \header('Vary: Cookie');
+
+        new ResponseEmitter(new OxPHP(), replaceHeaders: true)->emit(200, [
+            'Vary' => ['Accept', 'Accept-Encoding'],
+            'Link' => ['</app.css>; rel=preload; as=style', '</app.js>; rel=preload; as=script'],
+        ], 'ok');
+    }
+
+    /**
+     * Run under php-cgi by the test above: the app set a cookie with setcookie(), and the
+     * response carries two. PSR-7 keeps a header name as the app wrote it, so the
+     * lowercase one must still be told apart as Set-Cookie.
+     */
+    public static function replaceNextToANativeCookie(): void
+    {
+        \setcookie('native', '1');
+
+        new ResponseEmitter(new OxPHP(), replaceHeaders: true)->emit(200, ['set-cookie' => ['theme=dark', 'lang=en']], 'ok');
+    }
+
     /**
      * Run under php-cgi by the test above: a 202 with a Location header, as an API
      * answers a job it accepted.

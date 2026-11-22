@@ -13,6 +13,7 @@ use OxPHP\Runtime\Tests\Stub\CapturedOxPHPServer;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\MisreportedSizeStream;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\RunsUnderPhpCgi;
 use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
 use OxPHP\Runtime\Tests\Stub\UploadedFilesFixture;
 use PHPUnit\Framework\TestCase;
@@ -22,6 +23,8 @@ use Psr\Http\Message\UploadedFileInterface;
 
 final class Psr15RunnerTest extends TestCase
 {
+    use RunsUnderPhpCgi;
+
     private UploadedFilesFixture $uploads;
 
     protected function setUp(): void
@@ -299,5 +302,45 @@ final class Psr15RunnerTest extends TestCase
         $server = $handler->received[0]->getServerParams();
         \ksort($server);
         self::assertSame($expected, $server);
+    }
+
+    public function test_response_headers_replace_the_session_cache_limiters_and_keep_the_session_cookie(): void
+    {
+        if (!\function_exists('session_start')) {
+            self::markTestSkipped('ext-session not available');
+        }
+
+        $r = self::runUnderPhpCgi('handleAfterSessionStart');
+
+        self::assertSame(200, $r['status'], $r['stderr']);
+        self::assertSame('', $r['stderr']);
+        self::assertSame(['public, max-age=60'], self::headerValues($r['headers'], 'Cache-Control'));
+        // The body is the session id, so the session cookie can be told apart.
+        self::assertSame(['PHPSESSID=' . $r['body'] . '; path=/', 'theme=dark'], self::headerValues($r['headers'], 'Set-Cookie'));
+    }
+
+    /**
+     * Run under php-cgi by the test above: one traditional-mode request whose handler
+     * starts a native session, so PHP queues the session cookie and the default cache
+     * limiter's headers before the response is emitted.
+     */
+    public static function handleAfterSessionStart(): void
+    {
+        OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/'));
+        $f = new Psr17Factory();
+        $handler = new FakePsr15Handler(static function () use ($f): ResponseInterface {
+            \session_start(['save_path' => \sys_get_temp_dir()]);
+
+            return $f->createResponse()
+                ->withHeader('Cache-Control', 'public, max-age=60')
+                ->withHeader('Set-Cookie', 'theme=dark')
+                ->withBody($f->createStream((string) \session_id()));
+        });
+
+        try {
+            new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
+        } finally {
+            \session_destroy();
+        }
     }
 }
