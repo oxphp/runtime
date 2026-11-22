@@ -11,10 +11,13 @@ use OxPHP\Runtime\Internal\Runner\Psr7ResponseRunner;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\MisreportedSizeStream;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\RunsUnderPhpCgi;
 use PHPUnit\Framework\TestCase;
 
 final class Psr7ResponseRunnerTest extends TestCase
 {
+    use RunsUnderPhpCgi;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
@@ -57,5 +60,25 @@ final class Psr7ResponseRunnerTest extends TestCase
 
         self::assertSame(\md5($body), \md5($out));
         self::assertSame(4, OxPHPHarness::instance()->flushCount());
+    }
+
+    public function test_a_response_header_replaces_the_one_the_app_queued(): void
+    {
+        $r = self::runUnderPhpCgi('runAfterTheAppQueuedCacheControl');
+
+        self::assertSame('', $r['stderr']);
+        self::assertSame(['public, max-age=60'], self::headerValues($r['headers'], 'Cache-Control'));
+    }
+
+    /**
+     * Run under php-cgi by the test above: index.php queued a Cache-Control with header()
+     * before returning a response that carries its own.
+     */
+    public static function runAfterTheAppQueuedCacheControl(): void
+    {
+        \header('Cache-Control: no-store, no-cache, must-revalidate');
+        $response = new Psr17Factory()->createResponse()->withHeader('Cache-Control', 'public, max-age=60');
+
+        new Psr7ResponseRunner($response, new OxPHP(), new Psr17FactoryLocator())->run();
     }
 }

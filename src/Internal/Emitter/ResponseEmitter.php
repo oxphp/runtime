@@ -15,7 +15,19 @@ use OxPHP\Runtime\Internal\Bridge\OxPHP;
  */
 final class ResponseEmitter
 {
-    public function __construct(private readonly OxPHP $bridge) {}
+    /**
+     * @param bool $replaceHeaders how the response's headers meet the ones PHP already
+     *        queued (the app's header() calls, the session cache limiter). true, for PSR-7
+     *        responses: each header's first value replaces what is queued under that name
+     *        and the others are added after it; Set-Cookie never replaces, so a cookie the
+     *        app set natively (the session's) stays. This is what Laminas' SapiEmitter and
+     *        Slim's ResponseEmitter do. false, for HttpFoundation responses: every value is
+     *        added, as Symfony's Response::sendHeaders() adds all but Content-Type.
+     */
+    public function __construct(
+        private readonly OxPHP $bridge,
+        private readonly bool $replaceHeaders = false,
+    ) {}
 
     /**
      * @param array<string, string|list<string>> $headers
@@ -100,8 +112,11 @@ final class ResponseEmitter
         }
 
         foreach ($headers as $name => $values) {
+            $replace = $this->replaceHeaders && \strcasecmp((string) $name, 'Set-Cookie') !== 0;
+
             foreach ((array) $values as $v) {
-                \header($name . ': ' . $v, false);
+                \header($name . ': ' . $v, $replace);
+                $replace = false;
             }
         }
 

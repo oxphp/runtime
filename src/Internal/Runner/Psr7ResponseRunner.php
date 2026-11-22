@@ -25,7 +25,7 @@ final class Psr7ResponseRunner implements RunnerInterface
         OxPHP $bridge,
         private readonly Psr17FactoryLocator $psr17, // kept for API symmetry; not used today
     ) {
-        $this->emitter = new ResponseEmitter($bridge);
+        $this->emitter = new ResponseEmitter($bridge, replaceHeaders: true);
     }
 
     public function run(): int

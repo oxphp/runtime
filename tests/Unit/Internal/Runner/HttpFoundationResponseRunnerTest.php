@@ -8,12 +8,15 @@ use OxPHP\Runtime\Internal\Bridge\OxPHP;
 use OxPHP\Runtime\Internal\Runner\HttpFoundationResponseRunner;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\RunsUnderPhpCgi;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 final class HttpFoundationResponseRunnerTest extends TestCase
 {
+    use RunsUnderPhpCgi;
+
     protected function setUp(): void
     {
         OxPHPHarness::reset();
@@ -100,5 +103,25 @@ final class HttpFoundationResponseRunnerTest extends TestCase
             $events,
         );
         self::assertSame(1, OxPHPHarness::instance()->flushCount());
+    }
+
+    public function test_response_headers_are_added_next_to_the_ones_the_app_queued_as_symfony_sends_them(): void
+    {
+        $r = self::runUnderPhpCgi('runAfterTheAppQueuedXFrameOptions');
+
+        self::assertSame('', $r['stderr']);
+        // Symfony's Response::sendHeaders() replaces nothing but Content-Type.
+        self::assertSame(['DENY', 'SAMEORIGIN'], self::headerValues($r['headers'], 'X-Frame-Options'));
+    }
+
+    /**
+     * Run under php-cgi by the test above: index.php queued an X-Frame-Options with
+     * header() before returning a response that carries its own.
+     */
+    public static function runAfterTheAppQueuedXFrameOptions(): void
+    {
+        \header('X-Frame-Options: DENY');
+
+        new HttpFoundationResponseRunner(new Response('ok', 200, ['X-Frame-Options' => 'SAMEORIGIN']), new OxPHP())->run();
     }
 }
