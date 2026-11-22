@@ -105,13 +105,21 @@ abstract class AbstractHttpRunner implements RunnerInterface
 
     private function emitFallback500(\Throwable $e): void
     {
-        if (!\headers_sent()) {
-            // The failed response may have queued headers already, such as a Content-Length
-            // this body won't match or a Content-Disposition; none of them belong on the 500.
-            \header_remove();
-            \http_response_code(500);
-            \header('Content-Type: text/plain; charset=utf-8');
+        // Once the headers are out, the status can't change, and anything written now would
+        // become the end of the body the client is receiving (a CSV, an SSE stream, a JSON
+        // document). The body ends where it failed; OxPHP still ends the response cleanly, so
+        // the client can't tell it from a complete one.
+        if (\headers_sent()) {
+            \error_log('OxPHP runtime unhandled exception after the headers were sent, response cut short: ' . $e);
+
+            return;
         }
+
+        // The failed response may have queued headers already, such as a Content-Length
+        // this body won't match or a Content-Disposition; none of them belong on the 500.
+        \header_remove();
+        \http_response_code(500);
+        \header('Content-Type: text/plain; charset=utf-8');
         \error_log('OxPHP runtime unhandled exception: ' . $e);
         echo "Internal Server Error\n";
     }

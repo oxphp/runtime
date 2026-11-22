@@ -36,8 +36,8 @@ use Yiisoft\Yii\Runner\Http\Exception\HeadersHaveBeenSentException;
  * `Application::handle()` and the emit preparation, `ErrorCatcher` with a
  * `ThrowableHandler` when either throws, then `afterEmit()`. A throw from building the
  * container, bootstrap, `ErrorCatcher` or emitting goes up to `AbstractHttpRunner`,
- * which logs it and sends its fallback 500; a throw from `afterEmit()` is only
- * logged, since the response is already out.
+ * which logs it and, unless the headers are out already, sends its fallback 500; a
+ * throw from `afterEmit()` is only logged, since the response is already emitted.
  */
 final class YiiRunner extends AbstractHttpRunner
 {
@@ -107,7 +107,7 @@ final class YiiRunner extends AbstractHttpRunner
                 try {
                     $app->afterEmit($response ?? null);
                 } catch (\Throwable $afterEmitError) {
-                    // The response is already out; a fallback 500 would only be appended to it.
+                    // The response is already emitted; the fallback 500 must not replace it.
                     \error_log('OxPHP runtime: Application::afterEmit() threw: ' . $afterEmitError);
                 }
             }

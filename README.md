@@ -292,7 +292,14 @@ size, is flushed per 8 KiB chunk via `oxphp_stream_flush()` from the first
 byte, and OxPHP never compresses a streamed body. An exception thrown
 mid-stream closes the runtime's output buffers cleanly (bytes already
 streamed stay sent, partial buffers are discarded) and never poisons the
-worker.
+worker. If nothing had been written yet, the client gets a plain-text 500.
+After that the status can't change: the response ends where it failed,
+nothing is added to it, and the exception is logged. OxPHP still ends
+such a response cleanly, so the client can't tell it from a complete one.
+One exception: a
+callback that calls `oxphp_stream_flush()` (or `flush()` in an SSE
+response) before its first write has already sent the headers, which PHP
+doesn't track, so a throw then sends the 500's text as the body of the 200.
 
 When a client disconnects mid-stream, OxPHP by default stops the request
 inside the write that finds it gone, and every `finally` the callback was in

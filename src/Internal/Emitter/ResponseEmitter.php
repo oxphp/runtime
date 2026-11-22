@@ -66,13 +66,17 @@ final class ResponseEmitter
      * the engine invokes the SAPI flush hook right after each pass-through
      * write, which OxPHP wires to the stream push — verified live on 0.11.0
      * (chunks arrive as separate TCP reads, whether or not the callback
-     * calls flush() itself). The single oxphp_stream_flush() below runs in
-     * the finally block, in main context after the handler is closed, as
-     * the final push for tail bytes.
+     * calls flush() itself). The single oxphp_stream_flush() below runs once
+     * the callback has returned, in main context after the handler is
+     * closed, as the final push for tail bytes.
      *
      * A callback that throws must not poison the worker: all output buffers
      * opened at or above ours are closed before the throwable is rethrown,
-     * discarding partial data — bytes already streamed cannot be unsent.
+     * discarding partial data — bytes already streamed cannot be unsent. It
+     * gets no flush: OxPHP's first oxphp_stream_flush() sends the headers,
+     * which would put this response's status on the wire before the runner's
+     * fallback 500 could replace it. What it wrote before throwing is with
+     * the SAPI already and goes out with the request.
      *
      * @param array<string, string|list<string>> $headers
      */
@@ -100,8 +104,9 @@ final class ResponseEmitter
             throw $e;
         } finally {
             \ob_implicit_flush($restoreImplicitFlush);
-            $this->bridge->streamFlush();
         }
+
+        $this->bridge->streamFlush();
     }
 
     /** @param array<string, string|list<string>> $headers */

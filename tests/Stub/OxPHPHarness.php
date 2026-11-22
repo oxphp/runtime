@@ -28,6 +28,7 @@ final class OxPHPHarness
     /** @var array<string, mixed>|null */
     private ?array $requestServer = null;
     private bool $bailoutMode = false;
+    private bool $passOutputThrough = false;
     private int $bailouts = 0;
     /** @var list<\Closure> shutdown callbacks of the iteration in progress; null between iterations */
     private ?array $shutdownCallbacks = null;
@@ -80,6 +81,19 @@ final class OxPHPHarness
     public function setBailoutMode(bool $on): self
     {
         $this->bailoutMode = $on;
+        return $this;
+    }
+
+    /**
+     * For a worker scenario run under php-cgi (see RunsUnderPhpCgi) only: driveWorker()
+     * lets every request write straight to the SAPI instead of into a capture buffer,
+     * so headers_sent() turns true at the request's first byte, as on the server. The
+     * requests share the one CGI response: the body is all of theirs in order, and
+     * capturedOutputs() stays empty. In the test process it would print to stdout.
+     */
+    public function setPassOutputThrough(bool $on): self
+    {
+        $this->passOutputThrough = $on;
         return $this;
     }
 
@@ -228,7 +242,10 @@ final class OxPHPHarness
                 }
                 $this->shutdownCallbacks = [];
                 $level = \ob_get_level();
-                \ob_start();
+                if (!$this->passOutputThrough) {
+                    \ob_start();
+                }
+                $captureLevel = $this->passOutputThrough ? $level : $level + 1;
                 try {
                     // OxPHP runs every worker iteration inside a fiber of its
                     // own, and the request's shutdown functions on it after the
@@ -255,14 +272,19 @@ final class OxPHPHarness
                     $this->shutdownCallbacks = null;
                     // A request that bailed out can leave buffers of its own open;
                     // the end of the request flushes them into its output.
-                    while (\ob_get_level() > $level + 1) {
+                    while (\ob_get_level() > $captureLevel) {
                         \ob_end_flush();
                     }
-                    $this->outputs[] = (string) \ob_get_clean();
+                    if (!$this->passOutputThrough) {
+                        $this->outputs[] = (string) \ob_get_clean();
+                    }
                     $this->statuses[] = (int) \http_response_code();
                     // Simulate server-side soft reset: fresh status for the next
-                    // iteration so leftover 4xx/5xx codes don't leak.
-                    \http_response_code(200);
+                    // iteration so leftover 4xx/5xx codes don't leak. Under php-cgi,
+                    // the status of a response already under way can't change.
+                    if (!$this->passOutputThrough || !\headers_sent()) {
+                        \http_response_code(200);
+                    }
                     $this->resetCount++;
                 }
             }

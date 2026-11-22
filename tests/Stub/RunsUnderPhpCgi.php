@@ -42,8 +42,11 @@ trait RunsUnderPhpCgi
             ));
 
             // A minimal environment, so no CGI variable of the parent's changes how php-cgi treats the script.
+            // OxPHP's images run PHP without a php.ini, so output_buffering is 0 there. One that sets it
+            // (Homebrew's, php.ini-production) holds the body back in PHP's buffer, and headers_sent()
+            // stays false while it does.
             $process = \proc_open(
-                [$cgi, '-d', 'display_errors=stderr', $script],
+                [$cgi, '-d', 'display_errors=stderr', '-d', 'output_buffering=0', $script],
                 [0 => ['pipe', 'r'], 1 => ['file', $stdout, 'w'], 2 => ['file', $stderr, 'w']],
                 $pipes,
                 null,

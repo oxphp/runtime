@@ -14,6 +14,7 @@ use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\MisreportedSizeStream;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
 use OxPHP\Runtime\Tests\Stub\RunsUnderPhpCgi;
+use OxPHP\Runtime\Tests\Stub\ThrowingReadStream;
 use OxPHP\Runtime\Tests\Stub\UnknownSizeStream;
 use OxPHP\Runtime\Tests\Stub\UploadedFilesFixture;
 use PHPUnit\Framework\TestCase;
@@ -266,6 +267,37 @@ final class Psr15RunnerTest extends TestCase
         self::assertSame([\md5($small), \md5($large)], \array_map(\md5(...), $h->capturedOutputs()));
         // None for the small body; past the limit, one for what was read ahead, then one per 8 KiB chunk.
         self::assertSame([0, 0, 4], $flushes);
+    }
+
+    public function test_a_body_that_fails_after_its_first_chunk_ends_there_and_the_next_request_is_served(): void
+    {
+        $r = self::runUnderPhpCgi('failAfterTheFirstChunkThenServeAnother');
+
+        self::assertSame(200, $r['status'], $r['stderr']);
+        // The first chunk, then the next request's body: nothing between them.
+        self::assertSame('xxxxxxxxxxpsr15:/ok', $r['body']);
+        self::assertSame(1, \substr_count($r['stderr'], 'Read failed after 10 bytes'));
+        self::assertStringNotContainsString('Warning', $r['stderr']);
+    }
+
+    /**
+     * Run under php-cgi by the test above: a worker whose first response reports more
+     * than the server compresses, so it streams from the first chunk, and fails to read
+     * the second; the next request succeeds. Both write to the one CGI response.
+     */
+    public static function failAfterTheFirstChunkThenServeAnother(): void
+    {
+        OxPHPHarness::instance()
+            ->setWorker(true)
+            ->setPassOutputThrough(true)
+            ->pushRequest(FakeOxRequest::get('/export'))
+            ->pushRequest(FakeOxRequest::get('/ok'));
+        $f = new Psr17Factory();
+        $handler = new FakePsr15Handler(static fn (ServerRequestInterface $r): ResponseInterface => $r->getUri()->getPath() === '/export'
+            ? $f->createResponse()->withBody(new ThrowingReadStream(4 * 1024 * 1024, 10))
+            : $f->createResponse()->withBody($f->createStream('psr15:/ok')));
+
+        new Psr15Runner($handler, new OxPHP(), new Psr17FactoryLocator(), userResetters: [])->run();
     }
 
     public function test_a_request_without_a_host_header_is_served_with_localhost_as_the_uri_host(): void
