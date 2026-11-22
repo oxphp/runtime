@@ -9,6 +9,7 @@ use OxPHP\Runtime\Internal\Runner\HttpKernelRunner;
 use OxPHP\Runtime\Tests\Stub\Apps\FakeSymfonyKernel;
 use OxPHP\Runtime\Tests\Stub\FakeOxRequest;
 use OxPHP\Runtime\Tests\Stub\OxPHPHarness;
+use OxPHP\Runtime\Tests\Stub\RunsUnderPhpCgi;
 use OxPHP\Runtime\Tests\Stub\UploadedFilesFixture;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
@@ -19,6 +20,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 final class HttpKernelRunnerTest extends TestCase
 {
+    use RunsUnderPhpCgi;
+
     private UploadedFilesFixture $uploads;
 
     protected function setUp(): void
@@ -140,10 +143,47 @@ final class HttpKernelRunnerTest extends TestCase
         self::assertCount(2, $outputs);
         self::assertStringContainsString('partial', $outputs[0]);
         self::assertStringNotContainsString('trapped', $outputs[0]);
-        self::assertStringContainsString('Internal Server Error', $outputs[0]);
         self::assertSame('sym:/ok', $outputs[1]);
         self::assertSame(2, $resets);
         self::assertSame($level, \ob_get_level());
+    }
+
+    public function test_a_streamed_response_that_fails_midway_ends_with_what_it_sent_and_the_next_request_is_served(): void
+    {
+        $r = self::runUnderPhpCgi('streamRowsThenFailThenServeAnother');
+
+        self::assertSame(200, $r['status'], $r['stderr']);
+        // The CSV's rows, then the next request's body: nothing between them.
+        self::assertSame("id,name\n1,a\nsym:/ok", $r['body']);
+        self::assertSame(1, \substr_count($r['stderr'], 'export died'));
+        self::assertStringNotContainsString('Warning', $r['stderr']);
+    }
+
+    /**
+     * Run under php-cgi by the test above: a worker whose first request streams part of
+     * a CSV and then throws, and whose second succeeds. Both write to the one CGI response.
+     */
+    public static function streamRowsThenFailThenServeAnother(): void
+    {
+        OxPHPHarness::instance()
+            ->setWorker(true)
+            ->setPassOutputThrough(true)
+            ->pushRequest(FakeOxRequest::get('/report.csv'))
+            ->pushRequest(FakeOxRequest::get('/ok'));
+
+        $kernel = new FakeSymfonyKernel(static function (Request $r): Response {
+            if ($r->getPathInfo() !== '/report.csv') {
+                return new Response('sym:' . $r->getPathInfo());
+            }
+
+            return new StreamedResponse(static function (): void {
+                echo "id,name\n1,a\n";
+
+                throw new \RuntimeException('export died');
+            }, 200, ['Content-Type' => 'text/csv']);
+        });
+
+        new HttpKernelRunner($kernel, new OxPHP(), userResetters: [])->run();
     }
 
     public function test_worker_passes_each_response_status_to_the_sapi(): void

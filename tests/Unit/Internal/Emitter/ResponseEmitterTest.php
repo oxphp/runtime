@@ -106,7 +106,26 @@ final class ResponseEmitterTest extends TestCase
         $out = (string) \ob_get_clean();
 
         self::assertSame('sent', $out);
-        self::assertSame(1, OxPHPHarness::instance()->flushCount());
+    }
+
+    public function test_a_callback_that_throws_is_never_flushed_so_its_headers_can_still_be_replaced(): void
+    {
+        // OxPHP's first oxphp_stream_flush() sends the headers. Flushed after a throw, they
+        // would put the response's 200 on the wire before the runner's fallback 500.
+        $emitter = new ResponseEmitter(new OxPHP());
+
+        \ob_start();
+        try {
+            $emitter->emitCallback(200, ['Content-Type' => ['text/csv']], static function (): void {
+                throw new \DomainException('boom');
+            });
+            self::fail('expected DomainException');
+        } catch (\DomainException) {
+        } finally {
+            \ob_end_clean();
+        }
+
+        self::assertSame(0, OxPHPHarness::instance()->flushCount());
     }
 
     public function test_null_callback_emits_headers_only(): void

@@ -129,6 +129,37 @@ final class AbstractHttpRunnerTest extends TestCase
         $runner->run();
     }
 
+    public function test_a_failure_after_the_headers_are_sent_adds_nothing_to_the_body(): void
+    {
+        // The client already has the 200 and the first rows; text written now would become
+        // the last line of the CSV.
+        $r = self::runUnderPhpCgi('failAfterTheFirstRows');
+
+        self::assertSame(200, $r['status'], $r['stderr']);
+        self::assertSame("id,name\n1,a\n", $r['body']);
+        self::assertStringContainsString('body failed after its first rows', $r['stderr']);
+    }
+
+    /**
+     * Run under php-cgi by the test above: one traditional-mode request whose handler
+     * writes part of a CSV, so the headers go out, then throws.
+     */
+    public static function failAfterTheFirstRows(): void
+    {
+        OxPHPHarness::instance()->setCurrentRequest(FakeOxRequest::get('/report.csv'));
+
+        $runner = new class (new OxPHP(), new ResetterChain([])) extends AbstractHttpRunner {
+            protected function handleRequest(OxRequest $req): void
+            {
+                \header('Content-Type: text/csv');
+                echo "id,name\n1,a\n";
+
+                throw new \RuntimeException('body failed after its first rows');
+            }
+        };
+        $runner->run();
+    }
+
     public function test_run_worker_puts_boot_server_vars_back_into_every_request(): void
     {
         // The soft reset hands each request a $_SERVER of its own, without

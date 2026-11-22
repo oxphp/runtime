@@ -19,6 +19,11 @@ Anything in this file is **explicitly out of v1 scope**.
       Opt-in via runtime option.
 - [ ] `oxphp_async_await_all()` inside the Laravel `terminate()` phase:
       allow registered async jobs to be awaited after the response is sent.
+- [ ] Ask OxPHP (issue #14 follow-up) for a way to abort a response mid-body,
+      such as resetting the stream, so a response cut short by a failure isn't
+      taken for a complete one; and for whether its stream headers are out,
+      which `headers_sent()` misses after a flush with nothing written. The
+      fallback 500 would use both, and the second makes option 2 of #17 safe.
 
 ## v2 candidates
 
