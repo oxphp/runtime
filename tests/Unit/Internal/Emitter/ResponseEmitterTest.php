@@ -75,7 +75,8 @@ final class ResponseEmitterTest extends TestCase
         self::assertSame('abc', $out);
         // Each chunk reaches the next output level before the callback
         // continues, and the bridge is never flushed from handler context —
-        // per-chunk wire pushes are the engine's implicit flush.
+        // per-chunk pushes to the SAPI are the engine's implicit flush (OxPHP
+        // sends them on at once only in stream mode).
         self::assertSame(
             ['wire:a', 'cb:a flushes=0', 'wire:bc', 'cb:bc flushes=0'],
             $events,

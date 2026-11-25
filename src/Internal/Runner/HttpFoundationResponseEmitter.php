@@ -13,9 +13,11 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * @internal Emits an HttpFoundation Response through the ResponseEmitter —
  * the single place that maps Symfony response shapes onto emitter calls.
  *
- * StreamedResponse callbacks are driven live via emitCallback(): each chunk
- * the callback produces is flushed to the wire before the callback continues,
- * instead of being collected and replayed after it returns.
+ * StreamedResponse callbacks are driven via emitCallback(): each chunk the
+ * callback produces reaches the SAPI before the callback continues, instead
+ * of being collected and replayed after it returns. OxPHP sends it on at once
+ * only in stream mode (an SSE response, or after the callback's own
+ * oxphp_stream_flush()); any other response goes out when the callback returns.
  */
 final class HttpFoundationResponseEmitter
 {
