@@ -273,16 +273,43 @@ APP_RUNTIME_OPTIONS="{\"psr17_factory\":\"My\\\\Factory\"}"
 
 ## Streaming
 
-`StreamedResponse`, `StreamedJsonResponse`, and PSR-7 bodies larger than
-3 MiB or of unknown size are streamed chunk-by-chunk — ideal for SSE and large
-payloads.
+SSE responses and PSR-7 bodies larger than 3 MiB or of unknown size are
+streamed chunk by chunk. Any other `StreamedResponse` streams once its callback
+calls `oxphp_stream_flush()`, as below.
 
-Streamed callbacks are driven **live**: every `echo` inside a
-`StreamedResponse` callback goes to the wire as soon as it happens —
-chunks are never collected and replayed after the callback returns. The
-runtime enables PHP's implicit flush while driving the callback, so the
-engine pushes each chunk through the OxPHP SAPI's flush hook on write;
-the callback does not need to call `flush()` itself. A PSR-7 body that
+The runtime turns on PHP's implicit flush while a `StreamedResponse` callback
+runs, so each `echo` reaches the OxPHP SAPI as it happens, and the callback
+doesn't need to call `flush()`. OxPHP sends it on to the client at once only in
+stream mode. A response with `Content-Type: text/event-stream` is in stream
+mode from the start, so an SSE callback streams as it writes. Any other
+`StreamedResponse` (a CSV export, a `StreamedJsonResponse`) is held by the
+server and sent whole, headers included, when its callback returns. To stream
+one, call `oxphp_stream_flush()` once the callback has written something. It
+sends the headers and what was written so far, and from then on every `echo`
+goes out as it happens:
+
+```php
+return new StreamedResponse(function () use ($rows): void {
+    echo "id,name\n";
+    // Off OxPHP (PHP-FPM, the built-in server) the function doesn't exist.
+    if (\function_exists('oxphp_stream_flush')) {
+        \oxphp_stream_flush();
+    }
+    foreach ($rows as $row) {
+        echo $row['id'], ',', $row['name'], "\n";
+    }
+}, 200, ['Content-Type' => 'text/csv']);
+```
+
+In a `StreamedJsonResponse`, call it in the generator after the first `yield`,
+where Symfony's docs suggest `flush()`. Call it after a write, not before: one
+made before anything is written sends the headers without PHP knowing, and a
+throw then can no longer get a 500 (see below). From that call on, OxPHP treats
+the response as a stream when it shuts down gracefully. A worker-mode stream is
+ended once the drain begins, while an ordinary response gets the whole drain
+window (see "Behaviour on shutdown" in OxPHP's SSE docs).
+
+A PSR-7 body that
 reports a size up to 3 MiB, the most OxPHP compresses, is read before the
 headers go out, 8 KiB at a time and never more than 3 MiB plus one byte. If it
 ends within 3 MiB, it is sent whole without a flush, so the server can

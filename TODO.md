@@ -23,7 +23,16 @@ Anything in this file is **explicitly out of v1 scope**.
       such as resetting the stream, so a response cut short by a failure isn't
       taken for a complete one; and for whether its stream headers are out,
       which `headers_sent()` misses after a flush with nothing written. The
-      fallback 500 would use both, and the second makes option 2 of #17 safe.
+      fallback 500 would use both.
+- [ ] Stream every `StreamedResponse` (issue #17). Once OxPHP has a call that
+      turns stream mode on without sending the headers (asked for), make it in
+      `ResponseEmitter::emitCallback()` before the callback, if the function
+      exists. The headers then go out with the first byte, and a callback that
+      throws before writing still gets a 500. Then drop the README's advice to
+      call `oxphp_stream_flush()` in the callback. Check the graceful shutdown
+      first. OxPHP ends a suspended request in stream mode as soon as it starts
+      to drain, so a callback waiting before its first write (on the database,
+      say) would lose the drain window that an ordinary response gets.
 
 ## v2 candidates
 

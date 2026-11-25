@@ -10,8 +10,8 @@ use OxPHP\Runtime\Internal\Bridge\OxPHP;
  * @internal Writes HTTP headers once, then emits the body either as a
  * single string, as a stream of chunks (flushed to the wire via
  * oxphp_stream_flush() between chunks), or by driving a streaming
- * callback live (see emitCallback()) — enabling SSE and chunked transfer
- * without additional plumbing.
+ * callback (see emitCallback()), whose output OxPHP sends as it is
+ * written only in stream mode.
  */
 final class ResponseEmitter
 {
@@ -53,7 +53,7 @@ final class ResponseEmitter
 
     /**
      * Drives a streaming callback (e.g. from a Symfony StreamedResponse) so
-     * that every chunk it produces reaches the wire before the callback
+     * that every chunk it produces reaches the SAPI before the callback
      * continues — chunks are never collected and replayed after the fact.
      *
      * A chunk-size-1 pass-through output handler intercepts each echo: the
@@ -62,13 +62,22 @@ final class ResponseEmitter
      * handler must NOT call oxphp_stream_flush() — the OxPHP SAPI raises
      * "Cannot use output buffering in output buffering display handlers"
      * when it is invoked from handler context (verified on OxPHP 0.11.0).
-     * Per-chunk wire pushes are instead delegated to ob_implicit_flush():
-     * the engine invokes the SAPI flush hook right after each pass-through
-     * write, which OxPHP wires to the stream push — verified live on 0.11.0
-     * (chunks arrive as separate TCP reads, whether or not the callback
-     * calls flush() itself). The single oxphp_stream_flush() below runs once
-     * the callback has returned, in main context after the handler is
-     * closed, as the final push for tail bytes.
+     * ob_implicit_flush() makes the engine call the SAPI flush hook right
+     * after each pass-through write, whether or not the callback calls
+     * flush() itself. OxPHP sends anything from that hook only in stream
+     * mode (verified on 0.16.0). An SSE response is in stream mode from its
+     * Content-Type header on, so its chunks go out as written. Any other
+     * response enters it only at the first oxphp_stream_flush(), so the
+     * server holds its output until the callback makes that call itself or
+     * returns. The single oxphp_stream_flush() below runs once the callback
+     * has returned, in main context after the handler is closed: it sends
+     * the headers if nothing has yet, and whatever the server still holds.
+     *
+     * Streaming every response would take turning stream mode on before the
+     * callback, and OxPHP can't do that without sending the headers:
+     * oxphp_stream_flush() sends them at once, so a callback that throws
+     * before writing could no longer get a 500, and its header() calls would
+     * be lost (issue #17).
      *
      * A callback that throws must not poison the worker: all output buffers
      * opened at or above ours are closed before the throwable is rethrown,
