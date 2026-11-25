@@ -6,6 +6,7 @@ namespace OxPHP\Runtime\Internal\Yii;
 
 use Psr\Container\ContainerInterface;
 use Yiisoft\Config\ConfigInterface;
+use Yiisoft\Definitions\Reference;
 use Yiisoft\Di\Container;
 use Yiisoft\Di\ContainerConfig;
 use Yiisoft\Di\Helpers\DefinitionParser;
@@ -108,8 +109,48 @@ final class ContainerBlueprint
     }
 
     /**
+     * The provider extensions keyed on an alias of a listed id. A request container
+     * resolves the alias to the shared instance and runs the extension on it again.
+     *
+     * An alias is a definition that is another id (a string other than its own id) or
+     * a `Reference` to one, as `Container` resolves them, followed through other
+     * aliases. Any other definition, a closure that returns a listed service included,
+     * isn't followed.
+     *
+     * @param list<string> $ids listed ids
+     *
+     * @return array<string, string> extension key => the listed id it resolves to
+     */
+    public function extendedAliasesOf(array $ids): array
+    {
+        $aliases = [];
+        foreach ($this->providers as $provider) {
+            foreach (\array_keys($provider->getExtensions()) as $key) {
+                // An int key is left for `Container` to reject.
+                if (!\is_string($key) || \in_array($key, $ids, true)) {
+                    continue;
+                }
+
+                $seen = [];
+                for ($id = $key; $id !== null && !isset($seen[$id]); $id = $this->aliasedId($id)) {
+                    if (\in_array($id, $ids, true)) {
+                        $aliases[$key] = $id;
+
+                        break;
+                    }
+                    $seen[$id] = true;
+                }
+            }
+        }
+
+        return $aliases;
+    }
+
+    /**
      * A blueprint whose request containers return these instances and no longer
      * apply provider extensions to them: those ran when the instances were built.
+     * An extension keyed on an alias of one would still run, so
+     * `SharedServices::resolve()` rejects it.
      *
      * @param array<string, mixed> $instances id => built shared instance
      */
@@ -158,6 +199,45 @@ final class ContainerBlueprint
                 ->withDelegates($this->delegates)
                 ->withTags($this->tags),
         );
+    }
+
+    /**
+     * The id $id's definition resolves to by asking the container for it, as
+     * `Normalizer::normalize()` reads a string or a `Reference`, or null.
+     */
+    private function aliasedId(string $id): ?string
+    {
+        if (!\array_key_exists($id, $this->definitions)) {
+            return null;
+        }
+
+        $definition = DefinitionParser::parse($this->definitions[$id])[0];
+        if (\is_string($definition)) {
+            return $definition === $id ? null : $definition;
+        }
+        if (!$definition instanceof Reference) {
+            return null;
+        }
+
+        // A `Reference` keeps its id private; resolving it asks the container for that id.
+        $recorder = new class () implements ContainerInterface {
+            public ?string $id = null;
+
+            public function get(string $id): mixed
+            {
+                $this->id = $id;
+
+                return null;
+            }
+
+            public function has(string $id): bool
+            {
+                return true;
+            }
+        };
+        $definition->resolve($recorder);
+
+        return $recorder->id;
     }
 
     /**

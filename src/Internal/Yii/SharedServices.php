@@ -8,7 +8,9 @@ namespace OxPHP\Runtime\Internal\Yii;
  * @internal Builds the services an application shares between requests, once, at
  * boot, and rejects one that would carry per-request state into other requests:
  * a per-request service itself, a service that depends on one, and a service that
- * keeps a container or an `Injector` to resolve services later.
+ * keeps a container or an `Injector` to resolve services later. It also rejects a
+ * provider extension keyed on an alias of a listed service, which every request
+ * would run again on the shared instance.
  */
 final class SharedServices
 {
@@ -27,6 +29,14 @@ final class SharedServices
                     $id,
                 ));
             }
+        }
+
+        foreach ($blueprint->extendedAliasesOf($ids) as $alias => $id) {
+            throw new \LogicException(\sprintf(
+                'A provider extends "%1$s", an alias of shared service "%2$s", so the extension would run again in every request, against the shared instance. Key the extension on "%2$s", or add "%1$s" to sharedServices.',
+                $alias,
+                $id,
+            ));
         }
 
         $container = $blueprint->createSharedContainer($validate);

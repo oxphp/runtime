@@ -424,9 +424,12 @@ per-request service when it is a dependency.
   request. An alias of a listed id gets the shared instance, whether it is a
   class name (`ConnectionInterface::class => Connection::class`) or
   `Reference::to()`.
-- Key a shared service's provider extensions on the listed id itself, not on
-  an alias. An extension keyed on an alias runs again in every request,
-  against the shared instance.
+- Key a shared service's provider extensions on the listed id itself. An
+  extension keyed on an alias of a listed id would run again in every
+  request, against the shared instance, so it fails the boot. The message
+  names the alias and the listed id. Key the extension on the listed id, or
+  list the alias too (a provider you can't change): then the extension runs
+  once, at boot.
 - A service that keeps a container or an `Injector` can't be shared. That
   includes the event dispatcher, `Application` and middleware dispatchers.
   Listing one fails the boot, either because it holds a container or because
@@ -441,6 +444,10 @@ per-request service when it is a dependency.
   service that depends on a per-request service from a delegate passes boot.
 - Tags. Listing a `tag@…` id doesn't share its services; each request still
   builds them. List the member services instead.
+- Aliases made with a closure, such as
+  `ConnectionInterface::class => fn (Connection $c) => $c`. The guard follows
+  only class-name and `Reference::to()` aliases, so an extension keyed on a
+  closure alias passes boot and runs in every request.
 - Objects created when the config is read: `new Foo()` as a definition, as a
   constructor argument, or captured with `use` by a definition closure. Each
   exists once per worker and is shared by every request, listed or not. Define

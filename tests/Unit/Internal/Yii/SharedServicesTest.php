@@ -15,12 +15,14 @@ use OxPHP\Runtime\Tests\Stub\Yii\Guard\LazyService;
 use OxPHP\Runtime\Tests\Stub\Yii\Guard\NeedsCurrentRoute;
 use OxPHP\Runtime\Tests\Stub\Yii\Guard\NeedsTaggedProbes;
 use OxPHP\Runtime\Tests\Stub\Yii\PerRequestProbe;
+use OxPHP\Runtime\Tests\Stub\Yii\SharedProbe;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Yiisoft\Definitions\Reference;
 use Yiisoft\Di\BuildingException;
 use Yiisoft\Di\Container;
+use Yiisoft\Di\ServiceProviderInterface;
 use Yiisoft\Injector\Injector;
 use Yiisoft\Router\CurrentRoute;
 
@@ -29,6 +31,7 @@ final class SharedServicesTest extends TestCase
     private const DEPENDS_ON_PER_REQUEST = 'Shared service "%1$s" depends on per-request service "%2$s". Remove "%1$s" from sharedServices, or stop it depending on "%2$s".';
     private const LISTED_PER_REQUEST = 'Service "%s" cannot be shared: its definition has a "reset" callback, so it holds per-request state. Remove it from sharedServices.';
     private const HOLDS_CONTAINER = 'Shared service "%1$s" holds %2$s at %3$s. A shared service must not resolve services after boot; remove "%1$s" from sharedServices.';
+    private const EXTENDS_ALIAS = 'A provider extends "%1$s", an alias of shared service "%2$s", so the extension would run again in every request, against the shared instance. Key the extension on "%2$s", or add "%1$s" to sharedServices.';
 
     public function test_a_shared_service_that_needs_a_per_request_service_fails_naming_both(): void
     {
@@ -158,6 +161,89 @@ final class SharedServicesTest extends TestCase
         SharedServices::resolve($this->blueprint(), [ContainerInterface::class], false);
     }
 
+    /**
+     * @return iterable<string, array{array<string, mixed>}>
+     */
+    public static function provideAn_extension_keyed_on_an_alias_of_a_listed_service_fails_naming_bothCases(): iterable
+    {
+        yield 'class name' => [['probe.alias' => SharedProbe::class]];
+        yield 'Reference::to()' => [['probe.alias' => Reference::to(SharedProbe::class)]];
+        yield 'Reference::optional()' => [['probe.alias' => Reference::optional(SharedProbe::class)]];
+        yield 'dedicated definition' => [['probe.alias' => ['definition' => Reference::to(SharedProbe::class), 'tags' => ['probes']]]];
+        yield 'through another alias' => [[
+            'probe.alias' => 'probe.middle',
+            'probe.middle' => Reference::to(SharedProbe::class),
+        ]];
+    }
+
+    /**
+     * @param array<string, mixed> $di
+     */
+    #[DataProvider('provideAn_extension_keyed_on_an_alias_of_a_listed_service_fails_naming_bothCases')]
+    public function test_an_extension_keyed_on_an_alias_of_a_listed_service_fails_naming_both(array $di): void
+    {
+        $bp = $this->blueprint([SharedProbe::class => SharedProbe::class, ...$di], [self::extending('probe.alias')]);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage(\sprintf(self::EXTENDS_ALIAS, 'probe.alias', SharedProbe::class));
+
+        SharedServices::resolve($bp, [SharedProbe::class], false);
+    }
+
+    public function test_an_extension_keyed_on_an_alias_fails_before_any_shared_service_is_built(): void
+    {
+        $built = 0;
+        $bp = $this->blueprint([
+            SharedProbe::class => static function () use (&$built): SharedProbe {
+                ++$built;
+
+                return new SharedProbe();
+            },
+            'probe.alias' => SharedProbe::class,
+        ], [self::extending('probe.alias')]);
+
+        try {
+            SharedServices::resolve($bp, [SharedProbe::class], false);
+            self::fail('The extension on the alias was accepted.');
+        } catch (\LogicException $e) {
+            self::assertSame(\sprintf(self::EXTENDS_ALIAS, 'probe.alias', SharedProbe::class), $e->getMessage());
+        }
+
+        self::assertSame(0, $built);
+    }
+
+    public function test_an_extension_keyed_on_an_alias_of_an_unlisted_service_passes(): void
+    {
+        $bp = $this->blueprint([
+            SharedProbe::class => SharedProbe::class,
+            'probe.alias' => Reference::to(PerRequestProbe::class),
+        ], [self::extending('probe.alias')]);
+
+        self::assertSame([SharedProbe::class], \array_keys(SharedServices::resolve($bp, [SharedProbe::class], false)));
+    }
+
+    public function test_an_extension_keyed_on_a_service_that_builds_a_listed_class_passes(): void
+    {
+        // An array definition builds a new instance of the class, it isn't an alias.
+        $bp = $this->blueprint([
+            SharedProbe::class => SharedProbe::class,
+            'probe.copy' => ['class' => SharedProbe::class],
+        ], [self::extending('probe.copy')]);
+
+        self::assertSame([SharedProbe::class], \array_keys(SharedServices::resolve($bp, [SharedProbe::class], false)));
+    }
+
+    public function test_an_extension_keyed_on_an_alias_cycle_passes(): void
+    {
+        $bp = $this->blueprint([
+            SharedProbe::class => SharedProbe::class,
+            'probe.a' => 'probe.b',
+            'probe.b' => 'probe.a',
+        ], [self::extending('probe.a')]);
+
+        self::assertSame([SharedProbe::class], \array_keys(SharedServices::resolve($bp, [SharedProbe::class], false)));
+    }
+
     public function test_any_other_build_failure_is_rethrown_as_is(): void
     {
         $bp = $this->blueprint(['probe.broken' => static fn (): never => throw new \RuntimeException('Probe is broken.')]);
@@ -169,9 +255,33 @@ final class SharedServicesTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $di
+     * A provider whose extensions return the service unchanged.
      */
-    private function blueprint(array $di = []): ContainerBlueprint
+    private static function extending(string ...$ids): ServiceProviderInterface
+    {
+        return new class ($ids) implements ServiceProviderInterface {
+            /**
+             * @param list<string> $ids
+             */
+            public function __construct(private readonly array $ids) {}
+
+            public function getDefinitions(): array
+            {
+                return [];
+            }
+
+            public function getExtensions(): array
+            {
+                return \array_fill_keys($this->ids, static fn (ContainerInterface $c, mixed $service): mixed => $service);
+            }
+        };
+    }
+
+    /**
+     * @param array<string, mixed> $di
+     * @param list<ServiceProviderInterface> $providers
+     */
+    private function blueprint(array $di = [], array $providers = []): ContainerBlueprint
     {
         return ContainerBlueprint::fromConfig(new ArrayConfig([
             'di' => [
@@ -185,7 +295,7 @@ final class SharedServicesTest extends TestCase
                 ],
                 ...$di,
             ],
-            'providers' => [],
+            'providers' => $providers,
             'delegates' => [],
             'tags' => [],
         ]), 'di', 'providers', 'delegates', 'tags');

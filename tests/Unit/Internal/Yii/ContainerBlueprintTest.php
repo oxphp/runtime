@@ -121,6 +121,19 @@ final class ContainerBlueprintTest extends TestCase
         self::assertSame([PerRequestProbe::class => 3], $provider->calls);
     }
 
+    public function test_a_provider_extension_of_an_alias_listed_with_its_target_runs_once(): void
+    {
+        $provider = self::countingProvider('probe.alias');
+        $bp = $this->blueprint($this->config(['probe.alias' => SharedProbe::class], providers: [$provider]));
+        $instances = SharedServices::resolve($bp, [SharedProbe::class, 'probe.alias'], false);
+        $bp = $bp->withSharedInstances($instances);
+
+        for ($i = 0; $i < 3; ++$i) {
+            self::assertSame($instances[SharedProbe::class], $bp->createRequestContainer()->get('probe.alias'));
+        }
+        self::assertSame(['probe.alias' => 1], $provider->calls);
+    }
+
     public function test_a_shared_service_keeps_its_tags_in_request_containers(): void
     {
         $bp = $this->blueprint($this->config([SharedProbe::class => ['class' => SharedProbe::class, 'tags' => ['probes']]]));
