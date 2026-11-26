@@ -23,16 +23,22 @@ Anything in this file is **explicitly out of v1 scope**.
       such as resetting the stream, so a response cut short by a failure isn't
       taken for a complete one; and for whether its stream headers are out,
       which `headers_sent()` misses after a flush with nothing written. The
-      fallback 500 would use both.
-- [ ] Stream every `StreamedResponse` (issue #17). Once OxPHP has a call that
-      turns stream mode on without sending the headers (asked for), make it in
-      `ResponseEmitter::emitCallback()` before the callback, if the function
-      exists. The headers then go out with the first byte, and a callback that
-      throws before writing still gets a 500. Then drop the README's advice to
-      call `oxphp_stream_flush()` in the callback. Check the graceful shutdown
-      first. OxPHP ends a suspended request in stream mode as soon as it starts
-      to drain, so a callback waiting before its first write (on the database,
-      say) would lose the drain window that an ordinary response gets.
+      fallback 500 would use both. OxPHP fixed the second after 0.16.0 (not
+      released yet): a stream's first flush now sets `headers_sent()`.
+- [ ] `oxphp_stream_start()` (issue #17). It was added to OxPHP after 0.16.0
+      and isn't released yet. It puts a request in stream mode without
+      sending anything, and the headers go out at the first flush. Once it
+      ships, comment on #17 and change the README: a callback that writes as
+      it goes calls it first, if the function exists, instead of calling
+      `oxphp_stream_flush()` after its first write. Don't call it for every
+      `StreamedResponse`. From the call on, a graceful shutdown ends the
+      request as a stream instead of giving it the drain window, so only a
+      response that is really written as it is produced (a CSV export) should
+      opt in. If the runtime is to make the call itself, it should do so only
+      for a response that asks for it, e.g. with `X-Accel-Buffering: no`. The
+      same release makes `headers_sent()` true at a stream's first flush, so
+      the README's caveat about flushing before the first write, and the
+      matching note in `CLAUDE.md`, will apply to older versions only.
 
 ## v2 candidates
 
